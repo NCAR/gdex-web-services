@@ -1,0 +1,58 @@
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+    paths-ignore:
+      - ".github/**"
+      - ".gitignore"
+      - "app-chart/**"
+      - "README.md"
+      - "LICENSE"
+  workflow_dispatch:
+    inputs:
+      run_reason:
+        description: 'Provide a reason or comment for this workflow'
+        required: false
+        type: string
+        default: 'No comment provided'
+
+jobs:
+  container-rebuild:
+    if: github.event.pull_request.merged == true || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          ssh-key: ${{ secrets.ACTIONS_PUSH_KEY }}
+      - name: Get current version from values.yaml
+        run: |
+          VERSION=$(grep 'image:' app-chart/values.yaml | grep -oE 'v[0-9]+' | tr -d 'v')
+          echo "VERSION_NUMBER=$((VERSION+1))" >> $GITHUB_ENV
+      - name: Build new container image
+        run: >
+          docker build --platform linux/amd64
+          -t dattore/gdex-web-services:v${{ env.VERSION_NUMBER }}
+          --no-cache .
+      - name: Push image to Docker Hub
+        run: |
+          docker push dattore/gdex-web-services:v${{ env.VERSION_NUMBER }}
+          docker tag dattore/gdex-web-services:v${{ env.VERSION_NUMBER }} dattore/gdex-web-services:latest
+          docker push dattore/gdex-web-services:latest
+      - name: Update Helm chart image tag
+        run: |
+          git config user.email "${{ secrets.GIT_CONFIG_USER_EMAIL }}"
+          git config user.name "${{ secrets.GIT_CONFIG_USER_NAME }}"
+          sed -E "/image/s/gdex-web-services:(.){1,}/gdex-web-services:v${{ env.VERSION_NUMBER }}/" app-chart/values.yaml > app-chart/values.yaml.new
+          mv app-chart/values.yaml.new app-chart/values.yaml
+          git add app-chart/values.yaml
+          git commit -m "increment version"
+          git push

@@ -1,0 +1,28 @@
+replicaCount: 1
+
+webapp:
+  name: gdex-webservices
+  group: gdex-web
+  path: /
+  tls:
+    fqdn: gdex-services.k8s.ucar.edu
+    secretName: incommon-cert-gdex-webservices
+  container:
+    image: docker.io/dattore/gdex-web-services:v1
+    port: 8080
+    requests:
+      memory: 1Gi
+      cpu: 1
+    limits:
+      memory: 4Gi
+      cpu: 2
+    responseTimeout: 60
+    maxUploadSize: 10m
+  ingress:
+    ingressClassName: nginx-external
+
+volume:
+  fs:
+    name: gdexdata
+    size: 2Ti
+    mountPath: /data

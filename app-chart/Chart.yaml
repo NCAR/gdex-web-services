@@ -1,0 +1,6 @@
+apiVersion: v2
+name: gdex-web-services
+description: A Helm chart for GDEX Web Services (FastAPI)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
