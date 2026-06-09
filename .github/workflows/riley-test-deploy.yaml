@@ -1,0 +1,52 @@
+on:
+  push:
+    branches:
+      - riley/*
+    paths-ignore:
+      - ".github/**"
+      - ".gitignore"
+      - "app-chart/**"
+
+jobs:
+  container-rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.RILEY_HARBOR_USERNAME }}
+          password: ${{ secrets.RILEY_HARBOR_PASSWORD }}
+          registry: hub.k8s.ucar.edu/riley_gdex_test
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }} 
+          ssh-key: ${{ secrets.ACTIONS_PUSH_KEY }}
+      - name: Build a new version of container
+        run: >
+          docker build --platform linux/amd64
+          --build-arg VERSION_NUMBER=$VERSION_NUMBER
+          -t hub.k8s.ucar.edu/riley_gdex_test/gdex-web-services:v${{ github.run_id }}
+          --no-cache -f Dockerfile.riley . 
+      - name: Push the new image to Harbor
+        run: |
+          git branch
+          docker push hub.k8s.ucar.edu/riley_gdex_test/gdex-web-services:v${{ github.run_id }}
+          docker tag hub.k8s.ucar.edu/riley_gdex_test/gdex-web-services:v${{ github.run_id }} hub.k8s.ucar.edu/riley_gdex_test/gdex-web-services:latest
+          docker push hub.k8s.ucar.edu/riley_gdex_test/gdex-web-services:latest
+
+          #
+          ##
+          # Just use :latest tag
+          # No need to increment version
+          ##
+          #  - name: Update the Helm chart
+          #    run: |
+          #      git config user.email "${{ secrets.GIT_CONFIG_USER_EMAIL_RILEY }}"
+          #      git config user.name "${{ secrets.GIT_CONFIG_USER_NAME_RILEY }}"
+          #      git branch
+          #      sed -E "/image/s/gdex-web-portal:(.){1,}/gdex-web-portal:v${{ github.run_id }}/" app-chart/values.yaml.riley > app-chart/riley-values.yaml.new
+          #      mv app-chart/riley-values.yaml.new app-chart/values.yaml.riley
+          #      git add app-chart/values.yaml.riley
+          #      git commit -m "increment version"
+          #      git push
