@@ -38,6 +38,12 @@ spec:
         app: {{ .Values.webapp.name }}
         {{ end }}
     spec:
+      volumes:
+      - name: {{ .Values.webapp.volume.name }}
+        nfs:
+          server: {{ .Values.webapp.volume.server }}
+          path: {{ .Values.webapp.volume.path }}
+          readOnly: {{ .Values.webapp.volume.readOnly }}
       containers:
       {{ if .Values.testName }}
       - name: {{ .Values.testName }}-{{ .Values.webapp.name }}
@@ -55,15 +61,7 @@ spec:
             cpu: {{ .Values.webapp.container.limits.cpu }}
         ports:
         - containerPort: {{ .Values.webapp.container.port }}
-        {{ if .Values.volume }}
         volumeMounts:
-        - mountPath: {{ .Values.volume.fs.mountPath }}
-          name: {{ .Values.volume.fs.name }}
-          {{ if .Values.testName }}
-          readOnly: true
-          {{ end }}
-      volumes:
-      - name: {{ .Values.volume.fs.name }}
-        persistentVolumeClaim:
-          claimName: {{ .Values.volume.fs.name }}
-        {{ end }}
+        - mountPath: {{ .Values.webapp.volume.mountPath }}
+          name: {{ .Values.webapp.volume.name }}
+          readOnly: {{ .Values.webapp.volume.readOnly }}

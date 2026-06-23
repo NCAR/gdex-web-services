@@ -8,7 +8,7 @@ webapp:
     fqdn: gdex-services.k8s.ucar.edu
     secretName: incommon-cert-gdex-web-services
   container:
-    image: hub.k8s.ucar.edu/riley_gdex_test/gdex-web-portal:latest
+    image: hub.k8s.ucar.edu/riley_gdex_test/gdex-web-services:latest
     port: 8080
     requests:
       memory: 1Gi
@@ -20,9 +20,9 @@ webapp:
     maxUploadSize: 10m
   ingress:
     ingressClassName: nginx-external
-
-volume:
-  fs:
-    name: gdexdata
-    size: 2Ti
+  volume:
+    name: campaign
+    server: gladedm1.ucar.edu
+    path: /glade/campaign/collections/gdex/
     mountPath: /data
+    readOnly: true
