@@ -24,5 +24,5 @@ webapp:
     name: campaign
     server: gladedm1.ucar.edu
     path: /glade/campaign/collections/gdex/
-    mountPath: /data
+    mountPath: /glade/campaign/collections/gdex/
     readOnly: true
