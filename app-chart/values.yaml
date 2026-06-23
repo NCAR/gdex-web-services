@@ -2,13 +2,13 @@ replicaCount: 1
 
 webapp:
   name: gdex-webservices
-  group: gdex-web
+  group: gdex-web-services
   path: /
   tls:
     fqdn: gdex-services.k8s.ucar.edu
-    secretName: incommon-cert-gdex-webservices
+    secretName: incommon-cert-gdex-web-services
   container:
-    image: docker.io/dattore/gdex-web-services:v1
+    image: hub.k8s.ucar.edu/riley_gdex_test/gdex-web-portal:latest
     port: 8080
     requests:
       memory: 1Gi

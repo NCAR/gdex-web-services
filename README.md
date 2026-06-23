@@ -14,6 +14,33 @@ uvicorn app.main:app --reload --port 8080
 
 API docs are available at `http://localhost:8080/docs` once the server is running.
 
+## Testing
+
+```bash
+# Install dev dependencies
+pip install -r requirements-dev.txt
+
+# Run all tests
+pytest tests/ -v
+```
+
+## Docker
+
+```bash
+# Build the image
+docker build -t gdex-web-services .
+
+# Run the container
+docker run -d --name gdex-web-services -p 8080:8080 gdex-web-services
+```
+
+API docs are available at `http://localhost:8080/docs` once the container is running.
+
+```bash
+# Stop and remove the container
+docker stop gdex-web-services && docker rm gdex-web-services
+```
+
 ## Deployment
 
 Pushing to `main` triggers the GitHub Actions workflow, which builds a new Docker image and pushes it to Harbor (`hub.k8s.ucar.edu/riley_gdex_test/gdex-web-services`). The app is deployed to Kubernetes via the Helm chart in `app-chart/`.
