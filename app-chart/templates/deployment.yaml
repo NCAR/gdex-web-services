@@ -61,6 +61,17 @@ spec:
             cpu: {{ .Values.webapp.container.limits.cpu }}
         ports:
         - containerPort: {{ .Values.webapp.container.port }}
+        env:
+        - name: OBJECT_STORE_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.webapp.objectStore.secretName }}
+              key: access_key_id
+        - name: OBJECT_STORE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.webapp.objectStore.secretName }}
+              key: secret_key
         volumeMounts:
         - mountPath: {{ .Values.webapp.volume.mountPath }}
           name: {{ .Values.webapp.volume.name }}

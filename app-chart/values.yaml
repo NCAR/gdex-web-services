@@ -26,3 +26,8 @@ webapp:
     path: /glade/campaign/collections/gdex/
     mountPath: /glade/campaign/collections/gdex/
     readOnly: true
+  # Name of the Kubernetes Secret (created out-of-band via kubectl, not
+  # managed by this chart) holding the object store credentials. Must
+  # contain the keys access_key_id and secret_key.
+  objectStore:
+    secretName: boreas

@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from app.routers import datasets, files
+from app.routers import datasets, files, generators
 
 app = FastAPI(
     title="GDEX Web Services",
@@ -9,6 +9,7 @@ app = FastAPI(
 
 app.include_router(datasets.router)
 app.include_router(files.router)
+app.include_router(generators.router)
 
 
 @app.get("/")
