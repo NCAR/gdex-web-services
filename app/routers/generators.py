@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 router = APIRouter(prefix="/generators", tags=["generators"])
 
-_OBJECT_STORE_ENDPOINT = "https://boreas.ucar.edu"
+_OBJECT_STORE_ENDPOINT = "https://boreas.hpc.ucar.edu"
 _BUCKET = "gdex-data"
 _OBJECT_PREFIX = "services_tmp"
 _ALLOWED_ROOT = "/glade/"
