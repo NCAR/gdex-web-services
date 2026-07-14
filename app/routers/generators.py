@@ -38,22 +38,59 @@ def _s3_client():
     )
 
 
+def _find_time_dim(ds):
+    """Return the name of the time dimension in `ds`, if one can be identified, else None.
+
+    A dimension coordinate is treated as time if it's named "time", carries
+    a "calendar" attribute, or has "since" in its units (the CF convention
+    for time units, e.g. "days since 1990-01-01"). xarray decodes time
+    coordinates by default and moves their original "units"/"calendar"
+    attrs into `.encoding` rather than `.attrs`, so both are checked.
+    """
+    for name, var in ds.variables.items():
+        if name not in ds.dims:
+            continue
+        if name.lower() == "time":
+            return name
+        if var.attrs.get("calendar") or var.encoding.get("calendar"):
+            return name
+        units = var.attrs.get("units") or var.encoding.get("units") or ""
+        if "since" in units.lower():
+            return name
+    return None
+
+
+def _select_data_array(ds, variable):
+    """Pick the variable to plot and slice it to the first time step, if the dataset has a time dimension.
+
+    Returns (variable_name, DataArray).
+    """
+    if variable is not None:
+        if variable not in ds.data_vars:
+            raise HTTPException(status_code=400, detail=f"Variable not found: {variable}")
+        var_name = variable
+    else:
+        try:
+            var_name = next(iter(ds.data_vars))
+        except StopIteration:
+            raise HTTPException(status_code=400, detail="File has no data variables to visualize")
+
+    da = ds[var_name]
+    time_dim = _find_time_dim(ds)
+    if time_dim is not None and time_dim in da.dims:
+        da = da.isel({time_dim: 0})
+
+    return var_name, da
+
+
 def _render_netcdf_variable(path, variable):
     """Open a local NetCDF file with xarray and render one variable to PNG bytes."""
     with xr.open_dataset(path) as ds:
-        if variable is not None:
-            if variable not in ds.data_vars:
-                raise HTTPException(status_code=400, detail=f"Variable not found: {variable}")
-            var_name = variable
-        else:
-            try:
-                var_name = next(iter(ds.data_vars))
-            except StopIteration:
-                raise HTTPException(status_code=400, detail="File has no data variables to visualize")
+        var_name, da = _select_data_array(ds, variable)
 
         fig, ax = plt.subplots()
         try:
-            ds[var_name].plot(ax=ax)
+            da.plot(ax=ax)
             buf = BytesIO()
             fig.savefig(buf, format="png")
         finally:
