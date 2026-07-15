@@ -19,12 +19,12 @@ webapp:
     responseTimeout: 60
     maxUploadSize: 10m
   ingress:
-    ingressClassName: nginx-external
+    ingressClassName: nginx-internal
   volume:
     name: campaign
     server: gladedm1.ucar.edu
-    path: /glade/campaign/collections/gdex/
-    mountPath: /glade/campaign/collections/gdex/
+    path: /glade/campaign/
+    mountPath: /glade/campaign/
     readOnly: true
   # Name of the Kubernetes Secret (created out-of-band via kubectl, not
   # managed by this chart) holding the object store credentials. Must
