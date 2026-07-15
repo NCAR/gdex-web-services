@@ -101,10 +101,9 @@ def _check_globally_readable(path):
 def _scan_directory(root, max_results):
     """Recursively scan `root` for files that are not globally readable.
 
-    Symlinks are not followed. Stops early once `max_results` non-readable
-    files have been found, since that's already enough to answer "is this
-    tree fully world-readable" and avoids an unbounded walk over very large
-    or deeply nested directory trees (e.g. an NFS-mounted campaign share).
+    Symlinks are not followed. Stops early once `max_results` files have
+    been scanned, avoiding an unbounded walk over very large or deeply
+    nested directory trees (e.g. an NFS-mounted campaign share).
     Returns (files_scanned, non_readable_files, truncated).
     """
     files_scanned = 0
@@ -113,14 +112,14 @@ def _scan_directory(root, max_results):
 
     for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
         for fname in filenames:
+            if files_scanned >= max_results:
+                truncated = True
+                return files_scanned, non_readable, truncated
             fpath = Path(dirpath) / fname
             files_scanned += 1
             ok, reason = _check_globally_readable(fpath)
             if not ok:
                 non_readable.append({"path": str(fpath), "reason": reason})
-                if len(non_readable) >= max_results:
-                    truncated = True
-                    return files_scanned, non_readable, truncated
 
     return files_scanned, non_readable, truncated
 
@@ -151,8 +150,8 @@ async def check_access(
     For a local file, checks the world-read permission bit and that every
     parent directory is traversable by others. For a local directory,
     checks the directory itself unless `recursive` is set, in which case
-    every file under it is checked (stopping early after `max_results`
-    non-readable files are found). For an http(s) URL, sends a HEAD
+    files under it are checked up to `max_results` files (stopping early
+    once that many have been scanned). For an http(s) URL, sends a HEAD
     request and reports whether it responded successfully.
     """
     is_url = path.startswith("http://") or path.startswith("https://")
