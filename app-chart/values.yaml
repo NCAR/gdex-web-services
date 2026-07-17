@@ -8,7 +8,7 @@ webapp:
     fqdn: gdex-services.k8s.ucar.edu
     secretName: incommon-cert-gdex-web-services
   container:
-    image: hub.k8s.ucar.edu/riley_gdex_test/gdex-web-services:v29513773778
+    image: hub.k8s.ucar.edu/riley_gdex_test/gdex-web-services:v29598377894
     port: 8080
     requests:
       memory: 1Gi
