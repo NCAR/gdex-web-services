@@ -4,5 +4,6 @@ pydantic==2.11.4
 httpx==0.28.1
 xarray==2026.4.0
 netCDF4==1.7.2
+cfgrib==0.9.15.1
 matplotlib==3.11.0
 boto3==1.43.47

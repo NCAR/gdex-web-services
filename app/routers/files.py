@@ -3,7 +3,9 @@ import os
 import stat
 from pathlib import Path
 
+import cfgrib
 import httpx
+import xarray as xr
 from fastapi import APIRouter, HTTPException, Query
 
 router = APIRouter(prefix="/files", tags=["files"])
@@ -236,6 +238,50 @@ async def list_formats():
     }
 
 
+async def _classify_path(path: str, is_url: bool) -> tuple[str | None, str | None]:
+    """Determine the (family, format) of a local path or URL.
+
+    This is GET /files/format's detection logic, factored out so other
+    endpoints (e.g. /files/metadata) can identify a file before deciding how
+    to read it further. Zarr stores are identified by a top-level metadata
+    file; plain local directories are checked for the same Zarr markers even
+    without a '*.zarr' name; everything else is identified by its first 8
+    header bytes via _detect_file_format. Raises HTTPException(404) if a
+    local path doesn't exist.
+    """
+    if _is_zarr_path(path):
+        if is_url:
+            fmt = await _detect_zarr_url(path)
+        else:
+            p = Path(path)
+            if not p.exists():
+                raise HTTPException(status_code=404, detail=f"Path not found: {path}")
+            fmt = _detect_zarr_local(p) if p.is_dir() else None
+        return ("zarr" if fmt else None), fmt
+
+    if not is_url:
+        p = Path(path)
+        if p.is_dir():
+            # The '*.zarr' suffix above is just a naming convention, not
+            # required by the Zarr spec, so a local directory that doesn't
+            # match it can still be a Zarr store - check for the same marker
+            # files here. Directories have no magic bytes to sniff, so this
+            # replaces header-based detection for them entirely.
+            #
+            # There's no analogous fallback for URLs below: unlike a local
+            # stat(), a failed Range GET doesn't reliably tell us "this URL
+            # is a directory-style store" - a 404 is just as likely to mean
+            # the URL is missing or mistyped - and probing 3 extra marker
+            # URLs on every such 404 would add latency to the common case
+            # for a rare payoff. Remote Zarr stores must be named '*.zarr'
+            # to be detected.
+            fmt = _detect_zarr_local(p)
+            return ("zarr" if fmt else None), fmt
+
+    header = await (_read_url_header(path) if is_url else _read_local_header(path))
+    return _detect_file_format(header)
+
+
 @router.get("/format")
 async def file_format(path: str):
     """Detect the format (and version) of a local file path or URL.
@@ -251,36 +297,7 @@ async def file_format(path: str):
     is_url = path.startswith("http://") or path.startswith("https://")
 
     try:
-        if _is_zarr_path(path):
-            if is_url:
-                fmt = await _detect_zarr_url(path)
-            else:
-                p = Path(path)
-                if not p.exists():
-                    raise HTTPException(status_code=404, detail=f"Path not found: {path}")
-                fmt = _detect_zarr_local(p) if p.is_dir() else None
-            return {"path": path, "family": "zarr" if fmt else None, "format": fmt}
-
-        if not is_url:
-            p = Path(path)
-            if p.is_dir():
-                # The '*.zarr' suffix above is just a naming convention, not
-                # required by the Zarr spec, so a local directory that doesn't
-                # match it can still be a Zarr store - check for the same marker
-                # files here. Directories have no magic bytes to sniff, so this
-                # replaces header-based detection for them entirely.
-                #
-                # There's no analogous fallback for URLs below: unlike a local
-                # stat(), a failed Range GET doesn't reliably tell us "this URL
-                # is a directory-style store" - a 404 is just as likely to mean
-                # the URL is missing or mistyped - and probing 3 extra marker
-                # URLs on every such 404 would add latency to the common case
-                # for a rare payoff. Remote Zarr stores must be named '*.zarr'
-                # to be detected.
-                fmt = _detect_zarr_local(p)
-                return {"path": path, "family": "zarr" if fmt else None, "format": fmt}
-
-        header = await (_read_url_header(path) if is_url else _read_local_header(path))
+        family, fmt = await _classify_path(path, is_url)
     except HTTPException:
         raise
     except FileNotFoundError:
@@ -288,8 +305,96 @@ async def file_format(path: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    family, fmt = _detect_file_format(header)
     return {"path": path, "family": family, "format": fmt}
+
+
+def _netcdf_dataset_str(path: str) -> str:
+    """Open a local NetCDF file with xarray and return its __str__ representation.
+
+    xarray's default engine selection (netCDF4, via the netCDF4 package)
+    handles all NetCDF variants /files/format can identify - classic,
+    64-bit offset, 64-bit data, and netCDF-4/HDF5-based - without needing to
+    pick an engine per format.
+    """
+    with xr.open_dataset(path) as ds:
+        return str(ds)
+
+
+def _grib_dataset_str(path: str) -> str:
+    """Open a local GRIB file with cfgrib and return combined __str__ output.
+
+    Unlike NetCDF, a single GRIB file commonly mixes messages that don't
+    share one common grid/level/time structure (e.g. surface fields
+    alongside multiple pressure levels), so cfgrib.open_datasets splits the
+    file into one xarray.Dataset per self-consistent "hypercube" instead of
+    the single Dataset xr.open_dataset returns for NetCDF. Each hypercube's
+    __str__ is concatenated under a header line so `metadata` stays a
+    single string for both formats.
+    """
+    datasets = cfgrib.open_datasets(path)
+    try:
+        return "\n\n".join(f"--- hypercube {i + 1}/{len(datasets)} ---\n{ds}" for i, ds in enumerate(datasets))
+    finally:
+        for ds in datasets:
+            ds.close()
+
+
+@router.get("/metadata")
+async def file_metadata(path: str):
+    """Extract header/metadata information for a local file.
+
+    Uses the same detection as GET /files/format to identify the file's
+    family, then dispatches to a format-specific reader. NetCDF is opened
+    with xarray and GRIB with cfgrib; in both cases `metadata` is the
+    __str__ of the resulting xarray Dataset(s) (dimensions, coordinates,
+    data variables, and attributes). A GRIB file that splits into multiple
+    "hypercubes" (see _grib_dataset_str) has each one concatenated into the
+    same string. Other recognized families return `metadata: null` for now
+    - see the TODOs below.
+
+    TODO: remote URLs aren't supported yet (this currently returns 501 for
+    any http(s):// path). Unlike /files/format's 8-byte header sniff, full
+    metadata extraction generally needs either the whole file downloaded
+    first or an OPeNDAP-style engine that can stream it, and neither is
+    wired up here.
+    """
+    is_url = path.startswith("http://") or path.startswith("https://")
+    if is_url:
+        # TODO: support remote URLs - either download to a temp file before
+        # opening, or (for OPeNDAP-style endpoints) pass the URL straight to
+        # xr.open_dataset and let xarray/netCDF4 stream it.
+        raise HTTPException(status_code=501, detail="Metadata extraction for remote URLs is not yet supported")
+
+    try:
+        family, fmt = await _classify_path(path, is_url)
+    except HTTPException:
+        raise
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    metadata: str | None = None
+    if family == "netcdf":
+        try:
+            metadata = await asyncio.to_thread(_netcdf_dataset_str, path)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read NetCDF metadata: {e}")
+    elif family == "grib":
+        try:
+            metadata = await asyncio.to_thread(_grib_dataset_str, path)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read GRIB metadata: {e}")
+    elif family == "bufr":
+        pass  # TODO: extract BUFR metadata
+    elif family == "hdf":
+        pass  # TODO: extract HDF4 metadata, e.g. via pyhdf
+    elif family == "tiff":
+        pass  # TODO: extract TIFF/GeoTIFF metadata, e.g. via rasterio
+    elif family == "zarr":
+        pass  # TODO: extract Zarr metadata, e.g. via xarray/zarr
+
+    return {"path": path, "family": family, "format": fmt, "metadata": metadata}
 
 
 def _parents_traversable(path):
