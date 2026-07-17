@@ -10,6 +10,17 @@ from fastapi import APIRouter, HTTPException, Query
 
 router = APIRouter(prefix="/files", tags=["files"])
 
+_EXAMPLE_NETCDF_PATH = (
+    "/glade/campaign/collections/gdex/data/exchange/Credit-TOA-Solar_Irradiance/"
+    "credit_solar_nc_1h_0.25deg/solar_irradiance_2024-01-01_0000_2024-12-31_2300.nc"
+)
+_EXAMPLE_NETCDF_OPENAPI_EXAMPLES = {
+    "solar_irradiance": {
+        "summary": "Solar irradiance NetCDF",
+        "value": _EXAMPLE_NETCDF_PATH,
+    }
+}
+
 # Magic bytes for NetCDF variants
 _NETCDF_MAGIC = {
     b"CDF\x01": "CDF-1",
@@ -163,7 +174,7 @@ async def _detect_zarr_url(url: str) -> str | None:
 
 
 @router.get("/is-netcdf")
-async def is_netcdf(path: str):
+async def is_netcdf(path: str = Query(..., openapi_examples=_EXAMPLE_NETCDF_OPENAPI_EXAMPLES)):
     """Check whether a local file path or URL points to a NetCDF file."""
     is_url = path.startswith("http://") or path.startswith("https://")
 
@@ -283,7 +294,7 @@ async def _classify_path(path: str, is_url: bool) -> tuple[str | None, str | Non
 
 
 @router.get("/format")
-async def file_format(path: str):
+async def file_format(path: str = Query(..., openapi_examples=_EXAMPLE_NETCDF_OPENAPI_EXAMPLES)):
     """Detect the format (and version) of a local file path or URL.
 
     Identifies NetCDF (classic, 64-bit offset, 64-bit data, and netCDF-4/
@@ -340,7 +351,7 @@ def _grib_dataset_str(path: str) -> str:
 
 
 @router.get("/metadata")
-async def file_metadata(path: str):
+async def file_metadata(path: str = Query(..., openapi_examples=_EXAMPLE_NETCDF_OPENAPI_EXAMPLES)):
     """Extract header/metadata information for a local file.
 
     Uses the same detection as GET /files/format to identify the file's
@@ -480,7 +491,7 @@ async def _check_url_accessible(url: str) -> dict:
 
 @router.get("/check-access")
 async def check_access(
-    path: str,
+    path: str = Query(..., openapi_examples=_EXAMPLE_NETCDF_OPENAPI_EXAMPLES),
     recursive: bool = False,
     max_results: int = Query(default=100, ge=1, le=10000),
 ):
