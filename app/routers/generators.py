@@ -120,7 +120,16 @@ def _generate_and_upload(path, variable):
 
 
 @router.post("/visualize")
-async def visualize(path: str, variable: str | None = Query(default=None)):
+async def visualize(
+    path: str = Query(
+        ...,
+        examples=[
+            "/glade/campaign/collections/gdex/data/exchange/Credit-TOA-Solar_Irradiance/"
+            "credit_solar_nc_1h_0.25deg/solar_irradiance_2024-01-01_0000_2024-12-31_2300.nc"
+        ],
+    ),
+    variable: str | None = Query(default=None),
+):
     """Render a variable from a local NetCDF file with matplotlib and upload it to the object store.
 
     Uses xarray to open the file and plot either the given `variable` or,
