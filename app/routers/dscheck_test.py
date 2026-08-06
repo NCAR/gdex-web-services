@@ -16,7 +16,6 @@ from datetime import datetime
 # Import RDA/GDEX libraries
 try:
     from rda_python_common.pg_dbi import PgDBI
-    from rda_python_common.pg_log import PgLOG
     RDA_AVAILABLE = True
 except ImportError as e:
     raise RuntimeError(
@@ -48,8 +47,9 @@ async def get_dscheck_info() -> Dict[str, Any]:
         specialist = "chiaweih"
         condition = f"specialist = '{specialist}'"
 
-        # Query single record using pgget
-        record = PgDBI.pgget("dscheck", "*", condition, PgLOG.EXITLG)
+        # Create PgDBI instance and query single record using pgget
+        db = PgDBI()
+        record = db.pgget("dscheck", "*", condition, db.PGLOG['LOGMASK'])
 
         if not record:
             return {
