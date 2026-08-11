@@ -76,7 +76,6 @@ spec:
           valueFrom:
             secretKeyRef:
               name: {{ .Values.webapp.baoToken.existingSecret.name }}
-              namespace: rda 
               key: {{ .Values.webapp.baoToken.existingSecret.key }}
         volumeMounts:
         - mountPath: {{ .Values.webapp.volume.mountPath }}

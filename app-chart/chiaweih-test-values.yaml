@@ -1,7 +1,7 @@
 replicaCount: 1
 
 webapp:
-  name: chiaweih-gdex-webservices
+  name: gdex-webservices
   group: gdex-web-services
   path: /
   tls:
