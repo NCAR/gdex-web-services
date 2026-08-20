@@ -109,7 +109,7 @@ async def get_status_jsonl(cindex: int) -> Dict[str, Any]:
         elif record_status == 'R':
             message = f"dscheck record for cindex '{cindex}' is currently running."
             # read /glade/campaign/collections/gdex/decsdata/gdex-web-services-log
-            latest_log_path = f"/glade/campaign/collections/gdex/decsdata/gdex-web-services-log/{cindex}.jsonl"
+            latest_log_path = f"/glade/campaign/collections/gdex/data/exchange/Web-services/{cindex}.jsonl"
             try:
                 result = subprocess.run(
                     ["tail", "-1", latest_log_path],
