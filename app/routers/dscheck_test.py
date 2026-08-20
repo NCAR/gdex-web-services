@@ -8,7 +8,7 @@ GET-only endpoint with hardcoded query:
 
 SECURITY: Test endpoint only. Restrict access in production.
 """
-
+import json
 import subprocess
 from typing import Dict, Any
 from datetime import datetime
@@ -118,7 +118,13 @@ async def get_status_jsonl(cindex: int) -> Dict[str, Any]:
                     timeout=5,
                     check=True
                 )
-                latest_log = result.stdout.strip() if result.returncode == 0 else "No log data found."
+                raw = result.stdout.strip()
+                if result.returncode == 0 :
+                    latest_log = json.loads(raw)
+                else:
+                    latest_log = f"Failed to read log, return code: {result.returncode}"
+            except json.JSONDecodeError:
+                latest_log = raw
             except FileNotFoundError:
                 latest_log = "Log file not found."
             except subprocess.TimeoutExpired:
