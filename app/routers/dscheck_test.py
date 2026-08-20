@@ -9,6 +9,7 @@ GET-only endpoint with hardcoded query:
 SECURITY: Test endpoint only. Restrict access in production.
 """
 
+import subprocess
 from typing import Dict, Any
 from datetime import datetime
 from pathlib import Path
@@ -52,12 +53,12 @@ class MetadataRequest(BaseModel):
         return v
 
 
-@router.get("/getinfo1")
-async def get_dscheck_info() -> Dict[str, Any]:
+@router.get("/status/{cindex}")
+async def get_status_jsonl(cindex: int) -> Dict[str, Any]:
     """
-    Retrieve dscheck information for specialist 'chiaweih'.
-
-    This is a test endpoint with hardcoded query parameters.
+    Retrieve dscheck status and latest output log located in 
+    /glade/campaign/collections/gdex/decsdata/gdex-web-services-log
+    for specific cindex.
 
     Returns
     -------
@@ -71,22 +72,15 @@ async def get_dscheck_info() -> Dict[str, Any]:
         - record (dict): The first dscheck record matching the query, or None
         - error (str, optional): Error message if query failed
 
-    Notes
-    -----
-    **SECURITY**: This is a test endpoint only. Uses hardcoded query:
-    - Table: dscheck
-    - Condition: specialist = 'chiaweih'
-    - Fields: * (all)
 
     Examples
     --------
-    >>> curl https://api_url/dscheck/getinfo1
-    {"success": true, "message": "Successfully retrieved dscheck record...", ...}
+    >>> curl -X GET https://api_url/dscheck/status/4071816
+    {"success": true, "message": "dscheck record found...", ...}
     """
     try:
         # Hardcoded query as specified
-        specialist = "chiaweih"
-        condition = f"specialist = '{specialist}'"
+        condition = f"cindex = {cindex}"
 
         # Create PgDBI instance and query single record using pgget
         db = PgDBI()
@@ -95,33 +89,66 @@ async def get_dscheck_info() -> Dict[str, Any]:
         if not record:
             return {
                 "success": False,
-                "message": f"No dscheck record found for specialist '{specialist}'",
+                "message": f"No dscheck record found for cindex '{cindex}'",
                 "timestamp": datetime.now().isoformat(),
-                "specialist": specialist,
+                "cindex": cindex,
                 "record": None
             }
 
-        # Extract and format first key-value pair
-        first_key, first_value = next(iter(record.items()))
+        # get status from the dscheck table
+        record_status = record.get('STATUS', 'Unknown')
+        if record_status == 'C':
+            message = f"dscheck record for cindex '{cindex}' is queued for execution."
+            return {
+                "success": False,
+                "message": message,
+                "timestamp": datetime.now().isoformat(),
+                "cindex": cindex,
+                "record": record
+            }
+        elif record_status == 'R':
+            message = f"dscheck record for cindex '{cindex}' is currently running."
+            # read /glade/campaign/collections/gdex/decsdata/gdex-web-services-log
+            latest_log_path = f"/glade/campaign/collections/gdex/decsdata/gdex-web-services-log/{cindex}.jsonl"
+            try:
+                result = subprocess.run(
+                    ["tail", "-1", latest_log_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=True
+                )
+                latest_log = result.stdout.strip() if result.returncode == 0 else "No log data found."
+            except FileNotFoundError:
+                latest_log = "Log file not found."
+            except subprocess.TimeoutExpired:
+                latest_log = "Log read timeout."
+            except Exception as e:
+                latest_log = f"Error reading log: {str(e)}"
 
-        if hasattr(first_value, 'isoformat'):
-            first_value = first_value.isoformat()
-
-        response_record = {first_key: first_value}
-
-        return {
-            "success": True,
-            "message": f"Successfully retrieved dscheck record for specialist '{specialist}'",
-            "timestamp": datetime.now().isoformat(),
-            "specialist": specialist,
-            "record": response_record
-        }
+            return {
+                "success": False,
+                "message": message,
+                "timestamp": datetime.now().isoformat(),
+                "cindex": cindex,
+                "record": record,
+                "latest_log": latest_log
+            }
+        else:
+            message = f"dscheck record for cindex '{cindex}' has status: {record_status}"
+            return {
+                "success": True,
+                "message": message,
+                "timestamp": datetime.now().isoformat(),
+                "cindex": cindex,
+                "record": record
+            }
 
     except Exception as e:
         error_msg = str(e)
         return {
             "success": False,
-            "message": "Failed to retrieve dscheck information",
+            "message": "Failed to retrieve status",
             "timestamp": datetime.now().isoformat(),
             "specialist": "chiaweih",
             "record": None,
@@ -208,7 +235,7 @@ async def submit_metadata_modify(
 
     try:
         # Hardcoded shell script for now as specified
-        command = 'add_global_attr_av.sh'
+        command = 'add_global_attr.pbs'
         specialist = "chiaweih"
 
         # Use relative paths with pathlib.Path
@@ -221,6 +248,7 @@ async def submit_metadata_modify(
         dict_dscheck_post['specialist'] = specialist
         dict_dscheck_post['argv'] = argv
         dict_dscheck_post['workdir'] = workdir
+        dict_dscheck_post['status'] = "R" # force no run status to get cindex first
 
         # Create PgDBI instance and query single record using pgget
         db = PgDBI()
@@ -228,7 +256,15 @@ async def submit_metadata_modify(
 
         # check output status and return appropriate response
         if cindex > 0:
+            # Update record with environment variables so when the script runs, it can access the cindex value
+            env_vars = f"CINDEX={cindex}"
+            record = {"environments": env_vars, 'status': "C"}
+            dict_dscheck_post['status'] = "C" # force queue status after env variable CINDEX is set
+            db.pgupdt("dscheck", record, f"cindex = {cindex}", db.PGLOG['LOGMASK'])
+            # update record
             dict_dscheck_post['cindex'] = cindex
+            dict_dscheck_post['environments'] = env_vars
+
             return {
                 "success": True,
                 "message": f"Successfully added dscheck record with cindex '{cindex}'",
