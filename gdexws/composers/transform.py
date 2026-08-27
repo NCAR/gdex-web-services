@@ -1,5 +1,6 @@
 """Transform script that executes commands on files based on a payload JSON."""
 import sys
+import argparse
 from gdexws.utils import load_payload, build_command, execute_command, service_log
 
 
@@ -104,10 +105,16 @@ def transform(payload_path: str) -> None:
                 sys.exit(1)
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python transform.py <payload.json>")
-        sys.exit(1)
+def main():
+    """CLI entry point."""
+    parser = argparse.ArgumentParser(
+        description="Execute commands on files based on a payload JSON"
+    )
+    parser.add_argument("-p", "--payload", help="Path to the payload JSON file", required=True)
+    args = parser.parse_args()
 
-    payload_file = sys.argv[1]
-    transform(payload_file)
+    transform(args.payload)
+
+
+if __name__ == "__main__":
+    main()

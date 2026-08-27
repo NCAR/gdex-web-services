@@ -1,5 +1,5 @@
 {
-  "Files": ["Web-services/test.nc"],
+  "Files": ["/gdex/data/exchange/Web-services/test.nc"],
   "Commands": [
     {
       "command": "add_global_meta",

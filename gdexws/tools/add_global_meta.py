@@ -2,21 +2,24 @@
 import os
 import time
 import argparse
-import netCDF4 as nc
+import netCDF4
 from gdexws.utils import service_log
 
 def add_global_meta(file_path, key, value, debug=False):
     """Add a global attribute to a netCDF file."""
-    service_log("add-global-meta", "DEBUG", "Adding global attribute")
+    if debug:
+        service_log("add-global-meta", "DEBUG", "Adding global attribute")
 
-    with nc.Dataset(file_path, mode="r+") as ds:
+    with netCDF4.Dataset(file_path, mode="r+") as ds:
         ds.setncattr(key, value)
 
     for i in range(6):
         time.sleep(10)
-        service_log("add-global-meta", "DEBUG" , "Loop iteration", iteration=i)
+        if debug:
+            service_log("add-global-meta", "DEBUG" , "Loop iteration", iteration=i)
 
-    service_log("add-global-meta", "DEBUG", "Process completed")
+    if debug:
+        service_log("add-global-meta", "DEBUG", "Process completed")
 
 def main():
     """CLI entry point."""
@@ -30,8 +33,9 @@ def main():
     parser.add_argument("-d", "--debug", action="store_true", help="Enable debug mode")
     args = parser.parse_args()
 
-    service_log("add-global-meta", "DEBUG", "Beginning process")
-    service_log("add-global-meta", "DEBUG", "Script info", script_dir=script_dir, script_name=script_name)
+    if args.debug:
+        service_log("add-global-meta", "DEBUG", "Beginning process")
+        service_log("add-global-meta", "DEBUG", "Script info", script_dir=script_dir, script_name=script_name)
 
     add_global_meta(args.file, args.global_attr_name, args.global_attr_value, args.debug)
 
