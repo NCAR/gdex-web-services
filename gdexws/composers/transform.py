@@ -113,6 +113,12 @@ def main():
     parser.add_argument("-p", "--payload", help="Path to the payload JSON file", required=True)
     args = parser.parse_args()
 
+    service_log(
+        command_name="transform",
+        level="INFO",
+        process_message="composer.transform started",
+        payload_path=args.payload
+    )
     transform(args.payload)
 
 
