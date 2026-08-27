@@ -4,16 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gdexws"
-version = "0.1.0"
+dynamic = ["version"]
 description = "GDEX web service tools for data processing and management"
 readme = "README.md"
 requires-python = ">=3.8"
+license = "MIT"
 authors = [
     {name = "GDEX Team"},
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
 
@@ -26,3 +26,13 @@ add-global-meta = "gdexws.tools.add_global_meta:main"
 
 [project.urls]
 Homepage = "https://github.com/NCAR/gdex-web-services"
+
+[tool.setuptools]
+packages = ["gdexws", "gdexws.tools", "gdexws.utils"]
+package-dir = {"gdexws" = "."}
+
+[tool.setuptools_scm]
+root = ".."
+local_scheme = "no-local-version"
+fallback_version = "0.1.0"
+
