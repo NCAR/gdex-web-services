@@ -15,12 +15,15 @@
 
 # Environment Management
 module --force purge
-module load ncarenv/24.12
-module load conda
-conda activate /glade/work/gdexdata/conda-envs/pg-gdex
+# module load ncarenv/24.12
+# module load conda
+# conda activate /glade/work/gdexdata/conda-envs/pg-gdex
+source /glade/u/home/chiaweih/gdex-web-services/test-gdexws-env/bin/activate
 
 ### Parse positional arguments
-PAYLOAD="$1"
+# PAYLOAD="$1"
+PAYLOAD="/glade/u/home/chiaweih/gdex-web-services/tests/test.payload.json"
+CINDEX="1"
 
 ### SETUP .jsonl
 jsonl_dir="/glade/campaign/collections/gdex/data/exchange/Web-services/"
@@ -34,7 +37,7 @@ time_iso=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 echo '{"command": "pbs", "time_of_process": "'"$time_iso"'", "level": "INFO", "process_message": "PBS job started"}' >> "$output_jsonl"
 
 # Execute transform (the payload can be Boreas link)
-python -u transform.py -p "$PAYLOAD" >> "$output_jsonl"
+transform -p "$PAYLOAD" >> "$output_jsonl"
 EXIT_CODE=$?
 
 # Shell end message
