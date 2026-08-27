@@ -2,20 +2,60 @@
 import json
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any, Dict, List
+
+try:
+    import httpx
+except ImportError:
+    httpx = None
 
 from .logging import service_log
 
 
-def load_payload(payload_path: str) -> Dict[str, Any]:
+def load_payload(payload_path: str, timeout: float = 10.0) -> Dict[str, Any]:
     """
-    Load payload JSON from a file path.
+    Load payload JSON from a file path or URL.
 
-    TODO: the path load of json is for testing purpose, we will change it to load from S3 in the future.
+    Accepts both local file paths (POSIX) and URLs (http/https).
+    Automatically detects the input type and loads accordingly.
 
     Parameters
     ----------
     payload_path : str
+        Either a local file path (POSIX) or a URL (http/https)
+    timeout : float
+        Timeout in seconds for HTTP requests. Default: 10.0
+
+    Returns
+    -------
+    dict
+        Dictionary containing payload configuration
+
+    Raises
+    ------
+    FileNotFoundError
+        If the local file does not exist
+    json.JSONDecodeError
+        If the content is not valid JSON
+    httpx.RequestError
+        If the HTTP request fails
+    ImportError
+        If loading from URL but httpx is not installed
+    """
+    # Check if it's a URL
+    if payload_path.startswith('http://') or payload_path.startswith('https://'):
+        return _load_payload_from_url(payload_path, timeout)
+    else:
+        return _load_payload_from_file(payload_path)
+
+
+def _load_payload_from_file(file_path: str) -> Dict[str, Any]:
+    """Load payload JSON from a local file.
+
+    Parameters
+    ----------
+    file_path : str
         Path to the payload JSON file
 
     Returns
@@ -30,8 +70,43 @@ def load_payload(payload_path: str) -> Dict[str, Any]:
     json.JSONDecodeError
         If the file is not valid JSON
     """
-    with open(payload_path, "r") as f:
+    with open(file_path, "r") as f:
         return json.load(f)
+
+
+def _load_payload_from_url(url: str, timeout: float = 10.0) -> Dict[str, Any]:
+    """Load payload JSON from a URL.
+
+    Parameters
+    ----------
+    url : str
+        HTTP or HTTPS URL to fetch payload JSON from
+    timeout : float
+        Timeout in seconds for the request
+
+    Returns
+    -------
+    dict
+        Dictionary containing payload configuration
+
+    Raises
+    ------
+    ImportError
+        If httpx is not installed
+    httpx.RequestError
+        If the HTTP request fails
+    json.JSONDecodeError
+        If the response is not valid JSON
+    """
+    if httpx is None:
+        raise ImportError(
+            "httpx is required for loading payload from URLs. "
+            "Install with: pip install httpx"
+        )
+
+    response = httpx.get(url, timeout=timeout, follow_redirects=True)
+    response.raise_for_status()
+    return response.json()
 
 
 def build_command(command_name: str, params: Dict[str, Any], file_path: str) -> List[str]:
