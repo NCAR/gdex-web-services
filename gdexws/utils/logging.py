@@ -78,4 +78,4 @@ def service_log(command_name: str, level: str, process_message: str, **kwargs) -
         process_message=process_message,
         **kwargs
     )
-    print(log_dict, file=sys.stdout)
+    print(log_dict, file=sys.stdout, flush=True)
