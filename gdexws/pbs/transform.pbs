@@ -21,9 +21,9 @@ module --force purge
 source /glade/u/home/chiaweih/gdex-web-services/test-gdexws-env/bin/activate
 
 ### Parse positional arguments
-# PAYLOAD="$1"
-PAYLOAD="/glade/u/home/chiaweih/gdex-web-services/tests/test.payload.json"
-CINDEX="1"
+PAYLOAD="$1"
+# PAYLOAD="/glade/u/home/chiaweih/gdex-web-services/tests/test.payload.json"
+# CINDEX="1"
 
 ### SETUP .jsonl
 jsonl_dir="/glade/campaign/collections/gdex/data/exchange/Web-services/"
