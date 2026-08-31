@@ -20,10 +20,8 @@ module --force purge
 # conda activate /glade/work/gdexdata/conda-envs/pg-gdex
 source /glade/u/home/chiaweih/gdex-web-services/test-gdexws-env/bin/activate
 
-### Parse positional arguments
-PAYLOAD="$1"
+### Payload location (can be a Boreas link or local path)
 PAYLOAD="/glade/u/home/chiaweih/gdex-web-services/tests/test.payload.json"
-# CINDEX="1"
 
 ### SETUP .jsonl
 jsonl_dir="/glade/campaign/collections/gdex/data/exchange/Web-services/"
