@@ -4,13 +4,15 @@ import time
 import argparse
 import netCDF4
 from gdexws.utils import service_log
+from gdexws.utils.file_validation import relpath_validate
 
 def add_global_meta(file_path, key, value, debug=False):
     """Add a global attribute to a netCDF file."""
+    full_path = relpath_validate([file_path])[0]  # Validate the file path
     if debug:
-        service_log("add-global-meta", "DEBUG", "Adding global attribute")
+        service_log("add-global-meta", "DEBUG", f"Adding global attribute {key}={value} to {file_path}")
 
-    with netCDF4.Dataset(file_path, mode="r+") as ds:
+    with netCDF4.Dataset(full_path, mode="r+") as ds:
         ds.setncattr(key, value)
 
     for i in range(6):

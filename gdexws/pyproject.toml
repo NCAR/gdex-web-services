@@ -19,6 +19,7 @@ classifiers = [
 
 dependencies = [
     "netCDF4>=1.5.0",
+    "httpx>=0.24.0",
 ]
 
 [project.scripts]

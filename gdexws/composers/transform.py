@@ -28,6 +28,7 @@ def transform(payload_path: str) -> None:
     payload_path : str
         Path to the payload JSON file
     """
+    # Load the payload JSON
     try:
         payload = load_payload(payload_path)
     except FileNotFoundError:
@@ -47,6 +48,7 @@ def transform(payload_path: str) -> None:
         )
         sys.exit(1)
 
+    # Parse files and commands from the payload
     files = payload.get("Files", [])
     commands = payload.get("Commands", [])
 
@@ -66,6 +68,7 @@ def transform(payload_path: str) -> None:
         )
         sys.exit(1)
 
+    # Start processing each file and loop through the commands
     for file_path in files:
         service_log(
             command_name="transform",
@@ -103,7 +106,6 @@ def transform(payload_path: str) -> None:
                     command=" ".join(cmd)
                 )
                 sys.exit(1)
-
 
 def main():
     """CLI entry point."""
