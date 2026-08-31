@@ -4,17 +4,14 @@ The router module for compose endpoints in the gdex-web-services FastAPI applica
 This module defines endpoints for compose action (i.e. transform ... etc), and including status retrieval.
 
 """
-import time
 from typing import Dict, Any
 from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, Query, BackgroundTasks
-import json
 import time
 import asyncio
 
-from app.schemas import TransformRequest
-from app.utils import get_dscheck_json, relpath_validate
+from app.utils import get_dscheck_json
 
 # Import RDA/GDEX libraries (rda-python-common) for database interaction and logging.
 try:
@@ -73,9 +70,9 @@ async def get_status(cindex: int) -> Dict[str, Any]:
 @router.post("/transform")
 async def post_transform(
     # request: TransformRequest,
-    issuer: str = Query(None),
-    specialist: str = Query("chiaweih"),
     background_tasks: BackgroundTasks,
+    issuer: str = Query(None),
+    specialist: str = Query("chiaweih")
 ) -> Dict[str, Any]:
     """
     Submit transformation job for dscheck processing.
@@ -169,29 +166,32 @@ async def post_transform(
 
     # Submit the PBS script for execution
     background_tasks.add_task(
-        func=pbs_submit,
-        workdir=workdir,
-        cindex_pbs=cindex_pbs,
-        specialist=specialist
+        pbs_submit,
+        workdir,
+        cindex_pbs,
+        specialist
     )
 
-    return get_dscheck_json(cindex=0, status_message=f"CINDEX = {cindex_pbs} : PBS script downloading + queued for execution")
+    return get_dscheck_json(cindex=cindex_pbs, status_message=f"PBS script downloading + queued for execution")
 
 async def pbs_submit(workdir: str, cindex_pbs: int, specialist: str) -> Dict[str, Any]:
     # check if the pbs script is downloaded successfully
     # pbs_script_path = Path(workdir) / f"{cindex_pbs}.pbs"
     # retry till it becomes available, or timeout after 3 mins
-    # print('Check for 3 mins, waiting for the pbs script to be downloaded',flush=True)
-    
+
+    # # local test
+    # print('Check for 3 mins, waiting for the pbs script to be downloaded to avoid race condition',flush=True)
     # timeout = 60*1
-    # time.sleep(timeout)
+    # await asyncio.sleep(timeout)
+
+    # k8s deployment
     timeout = 60*3
     start_time = time.time()
     pbs_script_path = Path(workdir) / f"{cindex_pbs}.pbs"
     while not pbs_script_path.exists():
         if time.time() - start_time > timeout:
             return get_dscheck_json(cindex=0, status_message=f"Failed on downloading PBS script at {pbs_script_path}")
-        time.sleep(10)
+        await asyncio.sleep(10)
     # return get_dscheck_json(cindex=0, status_message=f"PBS script downloaded successfully at {pbs_script_path}")
 
 
