@@ -51,7 +51,7 @@ def _read_latest_log(cindex: int) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_message: str = "") -> Dict[str, Any]:
+def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_message: Optional[str] = None) -> Dict[str, Any]:
     """Retrieve and format a dscheck record with its latest processing status.
 
     Queries the dscheck database table for the given cindex and retrieves
@@ -61,9 +61,12 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
     Parameters
     ----------
     cindex : int
-        The dscheck record index to retrieve.
+        The dscheck record index to retrieve. Default: 0
     issuer : str, optional
         Email or identifier of the person who initiated the API call.
+    status_message : str, optional
+        Custom status message. If provided, overrides the default generated message.
+        If None or not provided, generates default message based on record status.
 
     Returns
     -------
@@ -75,7 +78,7 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
         - argv: Arguments from the dscheck record
         - specialist: Specialist assigned to the record
         - issuer: Issuer identifier (or None if not provided)
-        - status_message: Human-readable status message
+        - status_message: Human-readable status message (custom or auto-generated)
         - processing_status: Latest log entry from JSONL file (or None)
     """
     if cindex == 0:
@@ -110,15 +113,16 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
         # Get the processing status from the latest log
         processing_status = _read_latest_log(cindex)
 
-        # Determine status message based on record status
-        # Captial word for Database columns name!!!
-        record_status = record.get('STATUS', 'Unknown')
-        if record_status == 'C':
-            status_message = f"dscheck record for cindex '{cindex}' is queued for execution."
-        elif record_status == 'R':
-            status_message = f"dscheck record for cindex '{cindex}' is currently running."
-        else:
-            status_message = f"dscheck record for cindex '{cindex}' has status: {record_status}"
+        # Determine status message: use provided or generate default
+        if status_message is None:
+            # Capital word for Database columns name!!!
+            record_status = record.get('STATUS', 'Unknown')
+            if record_status == 'C':
+                status_message = f"dscheck record for cindex '{cindex}' is queued for execution."
+            elif record_status == 'R':
+                status_message = f"dscheck record for cindex '{cindex}' is currently running."
+            else:
+                status_message = f"dscheck record for cindex '{cindex}' has status: {record_status}"
 
         return {
             "cindex": cindex,
