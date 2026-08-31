@@ -111,6 +111,7 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
         processing_status = _read_latest_log(cindex)
 
         # Determine status message based on record status
+        # Captial word for Database columns name!!!
         record_status = record.get('STATUS', 'Unknown')
         if record_status == 'C':
             status_message = f"dscheck record for cindex '{cindex}' is queued for execution."
@@ -122,12 +123,13 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
         return {
             "cindex": cindex,
             "time_of_status": datetime.now().isoformat(),
-            "command": record.get('command'),
-            "argv": record.get('argv'),
-            "specialist": record.get('specialist'),
+            "command": record.get('COMMAND'),
+            "argv": record.get('ARGV'),
+            "specialist": record.get('SPECIALIST'),
             "issuer": issuer,
             "status_message": status_message,
-            "processing_status": processing_status
+            "processing_status": processing_status,
+            "dscheck_full_record": record
         }
 
     except Exception as e:
