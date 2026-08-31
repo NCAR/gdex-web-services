@@ -4,7 +4,7 @@
     {
       "command": "add_global_meta",
       "global-attr-name": "gdex_dsid",
-      "global-attr-value": "dPayLoadTest2",
+      "global-attr-value": "dPayLoadTestXX",
       "debug": true
     }
   ]
