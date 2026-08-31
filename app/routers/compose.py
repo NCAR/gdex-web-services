@@ -124,11 +124,11 @@ async def post_transform(
 
     # for testing use the payload already on Boreas
     # TODO: need to get the request and save payload to the Boreas server 
-    payload_json = "https://boreas.hpc.ucar.edu:6443/gdex-data/services_tmp/payloads/transform.payload.json"
+    # payload_json_key = "services_tmp/payloads/transform.payload.json"
 
     # for testing use the pbs script already on Boreas
     # TODO: need to get the request and generate and save pbs script to the Boreas server
-    pbs_script = "https://boreas.hpc.ucar.edu:6443/gdex-data/services_tmp/pbs/transform.pbs"
+    pbs_script = "https://boreas.hpc.ucar.edu:6443/gdex-data/services_tmp/pbs/pbstransform.pbs"
 
     # Prepare the dscheck record for submission for pbs script download
     dict_dscheck_post = {
@@ -157,29 +157,33 @@ async def post_transform(
         else:
             log = PgLOG()
             log.pglog("Fail to add dscheck record for '{}'".format(dict_dscheck_post['command']), logact=PgLOG.RETMSG)
-            return get_dscheck_json(cindex=cindex_pbs, status_message="No cindex returned for download PBS script")
+            return get_dscheck_json(cindex=0, status_message="No cindex returned for download PBS script")
 
     except Exception as e:
         error_msg = str(e)
-        return get_dscheck_json(cindex=cindex_pbs, status_message="Failed on dscheck update info") | {"error": error_msg}
+        return get_dscheck_json(cindex=0, status_message="Failed on dscheck update info") | {"error": error_msg}
 
     # check if the pbs script is downloaded successfully
-    pbs_script_path = Path(workdir) / f"{cindex_pbs}.pbs"
+    # pbs_script_path = Path(workdir) / f"{cindex_pbs}.pbs"
     # retry till it becomes available, or timeout after 3 mins
+    print('suppose timeout is 3 mins, waiting for the pbs script to be downloaded',flush=True)
     import time
-    timeout = 60*3
-    start_time = time.time()
-    while not pbs_script_path.exists():
-        if time.time() - start_time > timeout:
-            return get_dscheck_json(cindex=cindex_pbs, status_message="Failed on downloading PBS script")
-        time.sleep(10)
+    timeout = 60*1
+    time.sleep(timeout)
+    # timeout = 60*3
+    # start_time = time.time()
+    # while not pbs_script_path.exists():
+    #     if time.time() - start_time > timeout:
+    #         return get_dscheck_json(cindex=0, status_message=f"Failed on downloading PBS script at {pbs_script_path}")
+    #     time.sleep(2)
+    ## return get_dscheck_json(cindex=0, status_message=f"PBS script downloaded successfully at {pbs_script_path}")
 
 
     # Prepare the dscheck record for submission for pbs script download
     dict_dscheck_post = {
-        'command': f'{cindex_pbs}.pbs',
+        'command': 'qsub',
         'specialist': specialist,
-        'argv': payload_json,
+        'argv': f'{cindex_pbs}.pbs',
         'workdir': workdir,
         'status': 'R',
     }
@@ -197,15 +201,17 @@ async def post_transform(
                 'status': "C"
             }
             db.pgupdt("dscheck", record, f"cindex = {cindex_transform}", db.PGLOG['LOGMASK'])
-            return get_dscheck_json(cindex=cindex_transform, status_message="PBS running")
+
         else:
             log = PgLOG()
             log.pglog("Fail to add dscheck record for '{}'".format(dict_dscheck_post['command']), logact=PgLOG.RETMSG)
-            return get_dscheck_json(cindex=cindex_transform, status_message="No cindex returned for download PBS script")
+            return get_dscheck_json(cindex=0, status_message="No cindex returned for download PBS script")
 
     except Exception as e:
         error_msg = str(e)
-        return get_dscheck_json(cindex=cindex_pbs, status_message="Failed to download PBS script") | {"error": error_msg}
+        return get_dscheck_json(cindex=0, status_message="Failed to submitting PBS script") | {"error": error_msg}
+
+    return get_dscheck_json(cindex=cindex_transform)
 
 @router.get("/health")
 async def health_check() -> Dict[str, Any]:
