@@ -8,8 +8,10 @@ import time
 from typing import Dict, Any
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, BackgroundTasks
 import json
+import time
+import asyncio
 
 from app.schemas import TransformRequest
 from app.utils import get_dscheck_json, relpath_validate
@@ -72,7 +74,8 @@ async def get_status(cindex: int) -> Dict[str, Any]:
 async def post_transform(
     # request: TransformRequest,
     issuer: str = Query(None),
-    specialist: str = Query("chiaweih")
+    specialist: str = Query("chiaweih"),
+    background_tasks: BackgroundTasks,
 ) -> Dict[str, Any]:
     """
     Submit transformation job for dscheck processing.
@@ -164,10 +167,21 @@ async def post_transform(
         error_msg = str(e)
         return get_dscheck_json(cindex=0, status_message="Failed on dscheck update info") | {"error": error_msg}
 
+    # Submit the PBS script for execution
+    background_tasks.add_task(
+        func=pbs_submit,
+        workdir=workdir,
+        cindex_pbs=cindex_pbs,
+        specialist=specialist
+    )
+
+    return get_dscheck_json(cindex=0, status_message=f"CINDEX = {cindex_pbs} : PBS script downloading + queued for execution")
+
+async def pbs_submit(workdir: str, cindex_pbs: int, specialist: str) -> Dict[str, Any]:
     # check if the pbs script is downloaded successfully
     # pbs_script_path = Path(workdir) / f"{cindex_pbs}.pbs"
     # retry till it becomes available, or timeout after 3 mins
-    print('Check for 3 mins, waiting for the pbs script to be downloaded',flush=True)
+    # print('Check for 3 mins, waiting for the pbs script to be downloaded',flush=True)
     
     # timeout = 60*1
     # time.sleep(timeout)
@@ -214,9 +228,9 @@ async def post_transform(
 
     except Exception as e:
         error_msg = str(e)
-        return get_dscheck_json(cindex=0, status_message="Failed to submitting PBS script") | {"error": error_msg}
+        raise RuntimeError(f"Failed to submit PBS script: {error_msg}") from e
 
-    return get_dscheck_json(cindex=cindex_transform)
+
 
 @router.get("/health")
 async def health_check() -> Dict[str, Any]:
