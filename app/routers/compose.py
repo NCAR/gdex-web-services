@@ -4,6 +4,7 @@ The router module for compose endpoints in the gdex-web-services FastAPI applica
 This module defines endpoints for compose action (i.e. transform ... etc), and including status retrieval.
 
 """
+import time
 from typing import Dict, Any
 from datetime import datetime
 from pathlib import Path
@@ -166,26 +167,30 @@ async def post_transform(
     # check if the pbs script is downloaded successfully
     # pbs_script_path = Path(workdir) / f"{cindex_pbs}.pbs"
     # retry till it becomes available, or timeout after 3 mins
-    print('suppose timeout is 3 mins, waiting for the pbs script to be downloaded',flush=True)
-    import time
-    timeout = 60*1
-    time.sleep(timeout)
-    # timeout = 60*3
-    # start_time = time.time()
-    # while not pbs_script_path.exists():
-    #     if time.time() - start_time > timeout:
-    #         return get_dscheck_json(cindex=0, status_message=f"Failed on downloading PBS script at {pbs_script_path}")
-    #     time.sleep(2)
-    ## return get_dscheck_json(cindex=0, status_message=f"PBS script downloaded successfully at {pbs_script_path}")
+    print('Check for 3 mins, waiting for the pbs script to be downloaded',flush=True)
+    
+    # timeout = 60*1
+    # time.sleep(timeout)
+    timeout = 60*3
+    start_time = time.time()
+    pbs_script_path = Path(workdir) / f"{cindex_pbs}.pbs"
+    while not pbs_script_path.exists():
+        if time.time() - start_time > timeout:
+            return get_dscheck_json(cindex=0, status_message=f"Failed on downloading PBS script at {pbs_script_path}")
+        time.sleep(10)
+    # return get_dscheck_json(cindex=0, status_message=f"PBS script downloaded successfully at {pbs_script_path}")
 
 
     # Prepare the dscheck record for submission for pbs script download
+    # CINDEX is pass as env var directly pass through the pbs with 
+    # single dscheck record with no update due to using the previous cindex_pbs
+    # this make it easier to track the status of the transform job with a single cindex
     dict_dscheck_post = {
         'command': 'qsub',
         'specialist': specialist,
-        'argv': f'{cindex_pbs}.pbs',
+        'argv': f'-v CINDEX={cindex_pbs} {cindex_pbs}.pbs',
         'workdir': workdir,
-        'status': 'R',
+        'status': 'C',
     }
     
     try:
@@ -193,19 +198,19 @@ async def post_transform(
         db = PgDBI()
         cindex_transform = db.pgadd("dscheck", dict_dscheck_post, PgLOG.EXITLG|PgLOG.AUTOID|PgLOG.DODFLT)
 
-        if cindex_transform > 0:
-            # Update record with environment variables so when the script runs, it can access the cindex value
-            env_vars = f"CINDEX={cindex_transform}"
-            record = {
-                "environments": env_vars, 
-                'status': "C"
-            }
-            db.pgupdt("dscheck", record, f"cindex = {cindex_transform}", db.PGLOG['LOGMASK'])
+        # if cindex_transform > 0:
+        #     # Update record with environment variables so when the script runs, it can access the cindex value
+        #     env_vars = f"CINDEX={cindex_transform}"
+        #     record = {
+        #         "environments": env_vars, 
+        #         'status': "C"
+        #     }
+        #     db.pgupdt("dscheck", record, f"cindex = {cindex_transform}", db.PGLOG['LOGMASK'])
 
-        else:
-            log = PgLOG()
-            log.pglog("Fail to add dscheck record for '{}'".format(dict_dscheck_post['command']), logact=PgLOG.RETMSG)
-            return get_dscheck_json(cindex=0, status_message="No cindex returned for download PBS script")
+        # else:
+        #     log = PgLOG()
+        #     log.pglog("Fail to add dscheck record for '{}'".format(dict_dscheck_post['command']), logact=PgLOG.RETMSG)
+        #     return get_dscheck_json(cindex=0, status_message="No cindex returned for download PBS script")
 
     except Exception as e:
         error_msg = str(e)
