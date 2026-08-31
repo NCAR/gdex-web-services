@@ -21,8 +21,8 @@ module --force purge
 source /glade/u/home/chiaweih/gdex-web-services/test-gdexws-env/bin/activate
 
 ### Parse positional arguments
-PAYLOAD="$1"
-PAYLOAD="/glade/u/home/chiaweih/gdex-web-services/tests/test.payload.json"
+PAYLOAD="https://boreas.hpc.ucar.edu:6443/gdex-data/services_tmp/payloads/transform.payload.json"
+# PAYLOAD="/glade/u/home/chiaweih/gdex-web-services/tests/test.payload.json"
 # CINDEX="1"
 
 ### SETUP .jsonl
@@ -31,6 +31,7 @@ output_jsonl="$jsonl_dir/$CINDEX.gdexws.jsonl"
 
 # Clear or create file
 > "$output_jsonl"
+echo "This is the $CINDEX. This is the $output_jsonl. This is the $PAYLOAD" >> "$output_jsonl"
 
 # Shell start message
 time_iso=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
