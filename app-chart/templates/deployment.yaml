@@ -72,7 +72,7 @@ spec:
             secretKeyRef:
               name: {{ .Values.webapp.objectStore.secretName }}
               key: secret_key
-        - name: PGBAOTOKEN
+        - name: BAOTOKEN
           valueFrom:
             secretKeyRef:
               name: {{ .Values.webapp.baoToken.existingSecret.name }}
