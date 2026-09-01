@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, Query, BackgroundTasks
 import time
 import asyncio
+import json
 
 from app.schemas.models import TransformRequest
 from app.utils import get_dscheck_json, create_transform_payload, create_pbs_script
@@ -76,7 +77,7 @@ async def get_log(cindex: int, issuer: str = Query(None)) -> Dict[str, Any]:
 
     Checks if the JSONL log file exists for the given cindex. Returns three possible
     responses:
-    1. Log exists: returns dscheck record with log entries
+    1. Log exists: returns dscheck record with parsed log entries
     2. cindex record exists but log not ready: returns dscheck record with status message
     3. No cindex record and no log: returns error indicating no record found
 
@@ -90,7 +91,7 @@ async def get_log(cindex: int, issuer: str = Query(None)) -> Dict[str, Any]:
     Returns
     -------
     dict
-        Standardized dscheck JSON response with status and log information.
+        Standardized dscheck JSON response with status and parsed log entries.
 
     Examples
     --------
@@ -103,8 +104,18 @@ async def get_log(cindex: int, issuer: str = Query(None)) -> Dict[str, Any]:
     if log_path.exists():
         try:
             response = get_dscheck_json(cindex, issuer=issuer)
+
+            # Parse JSONL file (each line is a separate JSON object)
+            log_entries = []
             with open(log_path, 'r') as f:
-                log_entries = [line.strip() for line in f if line.strip()]
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            log_entries.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            log_entries.append({"error": "Invalid JSON", "raw": line})
+
             response["log_entries"] = log_entries
             return response
         except Exception as e:
