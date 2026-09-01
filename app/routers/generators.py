@@ -3,7 +3,6 @@ import os
 import uuid
 from io import BytesIO
 
-import boto3
 import matplotlib
 
 matplotlib.use("Agg")
@@ -12,9 +11,10 @@ import matplotlib.pyplot as plt
 import xarray as xr
 from fastapi import APIRouter, HTTPException, Query
 
+from app.utils.boreas import _OBJECT_STORE_ENDPOINT, s3_client
+
 router = APIRouter(prefix="/generators", tags=["generators"])
 
-_OBJECT_STORE_ENDPOINT = "https://boreas.hpc.ucar.edu"
 _BUCKET = "gdex-data"
 _OBJECT_PREFIX = "services_tmp"
 _ALLOWED_ROOT = "/glade/"
@@ -26,16 +26,6 @@ def _resolve_local_path(path):
     if resolved != _ALLOWED_ROOT.rstrip("/") and not resolved.startswith(_ALLOWED_ROOT):
         raise HTTPException(status_code=403, detail=f"Path must be under {_ALLOWED_ROOT}")
     return resolved
-
-
-def _s3_client():
-    """Build a boto3 S3 client for the boreas object store using credentials from the environment."""
-    return boto3.client(
-        "s3",
-        endpoint_url=_OBJECT_STORE_ENDPOINT,
-        aws_access_key_id=os.environ["OBJECT_STORE_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["OBJECT_STORE_SECRET_KEY"],
-    )
 
 
 def _find_time_dim(ds):
@@ -102,7 +92,7 @@ def _render_netcdf_variable(path, variable):
 def _upload_image(image_bytes):
     """Upload PNG bytes to the boreas object store under the services_tmp/ prefix, publicly readable, and return the object key."""
     key = f"{_OBJECT_PREFIX}/{uuid.uuid4()}.png"
-    _s3_client().put_object(
+    s3_client().put_object(
         Bucket=_BUCKET,
         Key=key,
         Body=image_bytes,
