@@ -164,7 +164,7 @@ async def post_transform(
         error_msg = str(e)
         return get_dscheck_json(cindex=0, status_message="Failed on dscheck update info") | {"error": error_msg}
 
-    # Submit the PBS script for execution
+    # Submit the PBS script for execution in the background after it is downloaded, to avoid race condition
     background_tasks.add_task(
         pbs_submit,
         workdir,
@@ -172,9 +172,23 @@ async def post_transform(
         specialist
     )
 
+    # do not wait for the pbs_submit to finish, return the cindex_pbs for the user to check the status
     return get_dscheck_json(cindex=cindex_pbs, status_message=f"PBS script downloading + queued for execution")
 
 async def pbs_submit(workdir: str, cindex_pbs: int, specialist: str) -> Dict[str, Any]:
+    """
+    The async function to submit the PBS script for execution after it is downloaded.
+
+    Parameters
+    ----------
+    workdir : str
+        The working directory where the PBS script is located.
+    cindex_pbs : int
+        The cindex of the dscheck record for the PBS script download.
+    specialist : str
+        The specialist assigned to process the job.
+
+    """
     # check if the pbs script is downloaded successfully
     # pbs_script_path = Path(workdir) / f"{cindex_pbs}.pbs"
     # retry till it becomes available, or timeout after 3 mins
@@ -203,8 +217,7 @@ async def pbs_submit(workdir: str, cindex_pbs: int, specialist: str) -> Dict[str
         'command': 'qsub',
         'specialist': specialist,
         'argv': f'-v CINDEX={cindex_pbs} {cindex_pbs}.pbs',
-        'workdir': workdir,
-        'status': 'C',
+        'workdir': workdir
     }
     
     try:
@@ -214,12 +227,13 @@ async def pbs_submit(workdir: str, cindex_pbs: int, specialist: str) -> Dict[str
 
         # if cindex_transform > 0:
         #     # Update record with environment variables so when the script runs, it can access the cindex value
-        #     env_vars = f"CINDEX={cindex_transform}"
+        #     env_vars = f"BACKGROUND_CINDEX={cindex_transform}"
         #     record = {
-        #         "environments": env_vars, 
-        #         'status': "C"
+        #         'environments': env_vars,
+        #         'argv': f'-v CINDEX={cindex_pbs},BACKGROUND_CINDEX={cindex_transform} {cindex_pbs}.pbs'
         #     }
-        #     db.pgupdt("dscheck", record, f"cindex = {cindex_transform}", db.PGLOG['LOGMASK'])
+        #     # add the background cindex to the argv so that the pbs script can access it and update the status of the transform job
+        #     db.pgupdt("dscheck", record, f"cindex = {cindex_pbs}", db.PGLOG['LOGMASK'])
 
         # else:
         #     log = PgLOG()
