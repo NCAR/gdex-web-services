@@ -11,7 +11,8 @@ from fastapi import APIRouter, Query, BackgroundTasks
 import time
 import asyncio
 
-from app.utils import get_dscheck_json
+from app.schemas.models import TransformRequest
+from app.utils import get_dscheck_json, create_transform_payload, create_pbs_script
 
 # Import RDA/GDEX libraries (rda-python-common) for database interaction and logging.
 try:
@@ -26,6 +27,8 @@ except ImportError as e:
 
 
 router = APIRouter(prefix="/compose", tags=["compose"])
+
+WORKDIR = str(Path('/glade/campaign/collections/gdex/data/exchange/Web-services/'))
 
 
 @router.get("/status/{cindex}")
@@ -66,10 +69,63 @@ async def get_status(cindex: int) -> Dict[str, Any]:
     return get_dscheck_json(cindex)
 
 
+@router.get("/log/{cindex}")
+async def get_log(cindex: int, issuer: str = Query(None)) -> Dict[str, Any]:
+    """
+    Retrieve the processing log for a transformation job.
+
+    Checks if the JSONL log file exists for the given cindex. Returns three possible
+    responses:
+    1. Log exists: returns dscheck record with log entries
+    2. cindex record exists but log not ready: returns dscheck record with status message
+    3. No cindex record and no log: returns error indicating no record found
+
+    Parameters
+    ----------
+    cindex : int
+        The dscheck record index to retrieve logs for.
+    issuer : str, optional
+        Email or identifier of the person who initiated the request.
+
+    Returns
+    -------
+    dict
+        Standardized dscheck JSON response with status and log information.
+
+    Examples
+    --------
+    >>> curl -X GET https://api_url/compose/log/4071816
+    >>> curl -X GET "https://api_url/compose/log/4071816?issuer=user@ucar.edu"
+    """
+    log_path = Path(WORKDIR) / f"{cindex}.gdexws.jsonl"
+
+    # Case 1: Log file exists
+    if log_path.exists():
+        try:
+            response = get_dscheck_json(cindex, issuer=issuer)
+            with open(log_path, 'r') as f:
+                log_entries = [line.strip() for line in f if line.strip()]
+            response["log_entries"] = log_entries
+            return response
+        except Exception as e:
+            return get_dscheck_json(cindex=cindex, issuer=issuer, status_message=f"Error reading log: {str(e)}")
+
+    # Case 2 & 3: Check if cindex record exists in database
+    response = get_dscheck_json(cindex, issuer=issuer)
+
+    # If we got a valid dscheck record, log is just not ready yet
+    if response.get("cindex") and response["cindex"] > 0:
+        response["status_message"] = "Processing in progress, log not yet available"
+        return response
+
+    # Case 3: No cindex record and no log
+    return get_dscheck_json(cindex=0, issuer=issuer, status_message=f"No record found for cindex {cindex}")
+
+
 
 @router.post("/transform")
 async def post_transform(
-    # request: TransformRequest,
+    request: TransformRequest,
     background_tasks: BackgroundTasks,
     issuer: str = Query(None),
     specialist: str = Query("chiaweih")
@@ -120,23 +176,18 @@ async def post_transform(
     # if validation_result is not True:
     #     return validation_result
 
-    # setup where the pbs script is temperarily located on HPC
-    workdir = str(Path('/glade/campaign/collections/gdex/data/exchange/Web-services/'))
+    # Create and upload payload to Boreas
+    payload_url = create_transform_payload(request)
 
-    # for testing use the payload already on Boreas
-    # TODO: need to get the request and save payload to the Boreas server 
-    # payload_json_key = "services_tmp/payloads/transform.payload.json"
-
-    # for testing use the pbs script already on Boreas
-    # TODO: need to get the request and generate and save pbs script to the Boreas server
-    pbs_script = "https://boreas.hpc.ucar.edu:6443/gdex-data/services_tmp/pbs/pbstransform.pbs"
+    # Create and upload PBS script to Boreas
+    pbs_script = create_pbs_script(payload_url)
 
     # Prepare the dscheck record for submission for pbs script download
     dict_dscheck_post = {
         'command': 'curl',
         'specialist': specialist,
         'argv': f'-o transform.pbs "{pbs_script}"',
-        'workdir': workdir,
+        'workdir': WORKDIR,
         'status': 'R',
     }
     
@@ -167,7 +218,6 @@ async def post_transform(
     # Submit the PBS script for execution in the background after it is downloaded, to avoid race condition
     background_tasks.add_task(
         pbs_submit,
-        workdir,
         cindex_pbs,
         specialist
     )
@@ -175,14 +225,12 @@ async def post_transform(
     # do not wait for the pbs_submit to finish, return the cindex_pbs for the user to check the status
     return get_dscheck_json(cindex=cindex_pbs, status_message=f"PBS script downloading + queued for execution")
 
-async def pbs_submit(workdir: str, cindex_pbs: int, specialist: str) -> Dict[str, Any]:
+async def pbs_submit(cindex_pbs: int, specialist: str) -> Dict[str, Any]:
     """
     The async function to submit the PBS script for execution after it is downloaded.
 
     Parameters
     ----------
-    workdir : str
-        The working directory where the PBS script is located.
     cindex_pbs : int
         The cindex of the dscheck record for the PBS script download.
     specialist : str
@@ -190,7 +238,7 @@ async def pbs_submit(workdir: str, cindex_pbs: int, specialist: str) -> Dict[str
 
     """
     # check if the pbs script is downloaded successfully
-    # pbs_script_path = Path(workdir) / f"{cindex_pbs}.pbs"
+    # pbs_script_path = Path(WORKDIR) / f"{cindex_pbs}.pbs"
     # retry till it becomes available, or timeout after 3 mins
 
     # # local test
@@ -201,7 +249,7 @@ async def pbs_submit(workdir: str, cindex_pbs: int, specialist: str) -> Dict[str
     # k8s deployment
     timeout = 60*3
     start_time = time.time()
-    pbs_script_path = Path(workdir) / f"{cindex_pbs}.pbs"
+    pbs_script_path = Path(WORKDIR) / f"{cindex_pbs}.pbs"
     while not pbs_script_path.exists():
         if time.time() - start_time > timeout:
             return get_dscheck_json(cindex=0, status_message=f"Failed on downloading PBS script at {pbs_script_path}")
@@ -210,14 +258,14 @@ async def pbs_submit(workdir: str, cindex_pbs: int, specialist: str) -> Dict[str
 
 
     # Prepare the dscheck record for submission for pbs script download
-    # CINDEX is pass as env var directly pass through the pbs with 
+    # CINDEX is pass as env var directly pass through the pbs with
     # single dscheck record with no update due to using the previous cindex_pbs
     # this make it easier to track the status of the transform job with a single cindex
     dict_dscheck_post = {
         'command': 'qsub',
         'specialist': specialist,
         'argv': f'-v CINDEX={cindex_pbs} {cindex_pbs}.pbs',
-        'workdir': workdir
+        'workdir': WORKDIR
     }
     
     try:
