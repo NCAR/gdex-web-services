@@ -129,7 +129,7 @@ async def _read_url_header(url: str) -> bytes:
         return resp.content[:8]
 
 
-# Zarr stores are directories/prefixes, not single files with a header, so
+# Zarr stores are directories/prefixes, not single files with a header,so
 # they're identified by a top-level metadata file rather than magic bytes:
 # "zarr.json" for v3, or the legacy ".zgroup"/".zarray" for v2.
 _ZARR_V3_MARKER = "zarr.json"
