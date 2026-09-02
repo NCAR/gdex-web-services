@@ -77,6 +77,11 @@ spec:
             secretKeyRef:
               name: {{ .Values.webapp.baoToken.existingSecret.name }}
               key: {{ .Values.webapp.baoToken.existingSecret.key }}
+        - name: PGDB01_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.webapp.pgdb01Secret.existingSecret.name }}
+              key: {{ .Values.webapp.pgdb01Secret.existingSecret.key }}
         volumeMounts:
         - mountPath: {{ .Values.webapp.volume.mountPath }}
           name: {{ .Values.webapp.volume.name }}

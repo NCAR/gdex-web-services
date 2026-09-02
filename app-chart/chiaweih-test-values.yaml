@@ -31,6 +31,10 @@ webapp:
   # contain the keys access_key_id and secret_key.
   objectStore:
     secretName: boreas
+  pgdb01Secret:
+    existingSecret: 
+      name : pgdb01-superuser  # reference existing secret named PGDB01
+      key : password      # the key inside that secret
   baoToken:
     existingSecret: 
       name : baotoken  # reference existing secret named BAOTOKEN
