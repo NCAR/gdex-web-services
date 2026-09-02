@@ -12,6 +12,8 @@ import uuid
 import time
 import asyncio
 import json
+import logging
+import shutil
 
 from app.schemas.models import TransformRequest
 from app.utils import get_dscheck_json, create_transform_payload, create_pbs_script
@@ -30,7 +32,25 @@ except ImportError as e:
 
 router = APIRouter(prefix="/compose", tags=["compose"])
 
+# set up global constants
 WORKDIR = str(Path('/glade/campaign/collections/gdex/data/exchange/Web-services/'))
+LOGS_DIR = Path("/app/logs")
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def setup_request_logger(request_id: str):
+    """Create logger for this request"""
+    log_file = LOGS_DIR / f"{request_id}.log"
+
+    logger = logging.getLogger(f"request.{request_id}")
+    logger.handlers.clear()  # Clear any existing handlers
+    handler = logging.FileHandler(log_file)
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+
+    return logger, log_file
 
 
 @router.get("/status/{cindex}")
@@ -139,7 +159,7 @@ async def get_log(request_id: str, issuer: str = Query(None)) -> Dict[str, Any]:
 
 @router.post("/transform")
 async def post_transform(
-    request: TransformRequest,
+    # request: TransformRequest,
     background_tasks: BackgroundTasks,
     issuer: str = Query(None),
     specialist: str = Query("chiaweih")
@@ -171,7 +191,7 @@ async def post_transform(
 
     Examples
     --------
-    >>> curl -X POST https://api_url/compose/transform \\
+    >>> curl -X POST https://0.0.0.0:8080/compose/transform \\
     ...   -H "Content-Type: application/json" \\
     ...   -d '{
     ...     "Files": ["Web-services/test.nc"],
@@ -184,24 +204,29 @@ async def post_transform(
     ...       }
     ...     ]
     ...   }'
+    
     """
     # Generate unique request ID
-    request_id = str(uuid.uuid4())
+    # request_id = str(uuid.uuid4())
+    request_id = '8952b481-bfe9-4e34-b957-94009c47060d'
 
     # Create and upload payload to Boreas with request_id in filename
     # Format: services_tmp/payloads/transform.payload.{request_id}.json
-    payload_url = create_transform_payload(request, request_id=request_id)
+    # payload_url = create_transform_payload(request, request_id=request_id)
+    payload_url = 'https://boreas.hpc.ucar.edu/gdex-data/services_tmp/payloads/transform.payload.8952b481-bfe9-4e34-b957-94009c47060d.json'
 
     # Create and upload PBS script to Boreas with request_id in filename
     # Format: services_tmp/pbs/transform.{request_id}.pbs
-    pbs_script = create_pbs_script(payload_url, request_id=request_id)
+    # pbs_url = create_pbs_script(payload_url, request_id=request_id)
+    pbs_url = 'https://boreas.hpc.ucar.edu/gdex-data/services_tmp/pbs/transform.8952b481-bfe9-4e34-b957-94009c47060d.pbs'
 
     # Prepare the dscheck record for submission for pbs script download
     dict_dscheck_post = {
         'command': 'curl',
         'specialist': specialist,
         # Download PBS script and save locally as: transform.{request_id}.pbs
-        'argv': f'-o transform.{request_id}.pbs "{pbs_script}"',
+        'argv': f'-o transform.{request_id}.pbs "$DOWNLOAD_URL"',
+        'environments': f'DOWNLOAD_URL={pbs_url}',
         'workdir': WORKDIR
     }
     
@@ -243,41 +268,61 @@ async def pbs_submit(specialist: str, request_id: str, workdir: str = WORKDIR) -
         The working directory where the PBS script is located.
 
     """
-    # check if the pbs script is downloaded successfully
-    # retry till it becomes available, or timeout after 3 mins
+    logger, log_file = setup_request_logger(request_id)
+    error_occurred = False
 
-    # # local test
-    # timeout = 60*1
-    # await asyncio.sleep(timeout)
-
-    # k8s deployment
-    timeout = 60*3
-    start_time = time.time()
-    pbs_script_path = Path(workdir) / f"transform.{request_id}.pbs"
-    while not pbs_script_path.exists():
-        if time.time() - start_time > timeout:
-            return get_dscheck_json(cindex=0, status_message=f"Failed on downloading PBS script at {pbs_script_path}")
-        await asyncio.sleep(10)
-    # return get_dscheck_json(cindex=0, status_message=f"PBS script downloaded successfully at {pbs_script_path}")
-
-
-    # Prepare the dscheck record for submission for pbs script download
-    # REQUEST_ID is passed as env var to PBS script for JSONL filename
-    dict_dscheck_post = {
-        'command': 'qsub',
-        'specialist': specialist,
-        'argv': f'-v REQUEST_ID={request_id} transform.{request_id}.pbs',
-        'workdir': workdir
-    }
-    
     try:
-        # Create PgDBI instance and add record
-        db = PgDBI()
-        cindex_submit = db.pgadd("dscheck", dict_dscheck_post, PgLOG.EXITLG|PgLOG.AUTOID|PgLOG.DODFLT)
+        logger.info(f"Starting PBS submission for request {request_id}")
+
+        # check if the pbs script is downloaded successfully
+        # retry till it becomes available, or timeout after 3 mins
+
+        # # local test
+        # timeout = 60*1
+        # await asyncio.sleep(timeout)
+
+        # k8s deployment
+        timeout = 60*3
+        start_time = time.time()
+        pbs_script_path = Path(workdir) / f"transform.{request_id}.pbs"
+        while not pbs_script_path.exists():
+            if time.time() - start_time > timeout:
+                logger.error(f"Failed on downloading PBS script at {pbs_script_path}")
+                error_occurred = True
+                raise RuntimeError(f"Failed on downloading PBS script at {pbs_script_path}")
+            await asyncio.sleep(10)
+
+        logger.info(f"PBS script downloaded successfully at {pbs_script_path}")
+
+        # Prepare the dscheck record for submission for pbs script download
+        # REQUEST_ID is passed as env var to PBS script for JSONL filename
+        dict_dscheck_post = {
+            'command': 'qsub',
+            'specialist': specialist,
+            'argv': f'-v REQUEST_ID={request_id} transform.{request_id}.pbs',
+            'workdir': workdir
+        }
+
+        try:
+            # Create PgDBI instance and add record
+            db = PgDBI()
+            cindex_submit = db.pgadd("dscheck", dict_dscheck_post, PgLOG.EXITLG|PgLOG.AUTOID|PgLOG.DODFLT)
+            logger.info(f"PBS script submitted successfully with cindex: {cindex_submit}")
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Failed to submit PBS script: {error_msg}")
+            error_occurred = True
+            raise RuntimeError(f"Failed to submit PBS script: {error_msg}") from e
 
     except Exception as e:
-        error_msg = str(e)
-        raise RuntimeError(f"Failed to submit PBS script: {error_msg}") from e
+        error_occurred = True
+        logger.exception(f"Unexpected error in PBS submission: {e}")
+
+    finally:
+        # Only delete logs on success, keep them for debugging on error
+        if log_file.exists() and not error_occurred:
+            log_file.unlink()
 
 
 
