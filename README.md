@@ -1,6 +1,6 @@
 # gdex-web-services
 
-A lightweight FastAPI service for running ad-hoc data processing and convenience jobs in support of the [GDEX](https://gdex.ucar.edu) data portal. Rather than burdening the main web portal with one-off or background tasks, this service provides a simple, independently deployable API for those operations.
+A lightweight FastAPI service for running ad-hoc data processing and convenience jobs in support of the [GDEX](https://gdex.ucar.edu) data portal. Rather than burdening the main web portal with one-off or background tasks, this service provides a simple, independently deployable API for those operations..
 
 ## Development
 
