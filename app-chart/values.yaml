@@ -31,3 +31,8 @@ webapp:
   # contain the keys access_key_id and secret_key.
   objectStore:
     secretName: boreas
+  baoToken:
+    existingSecret: 
+      name : baotoken  # reference existing secret named BAOTOKEN
+      key : token      # the key inside that secret
+
