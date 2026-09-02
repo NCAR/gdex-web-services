@@ -6,7 +6,7 @@ webapp:
   path: /
   tls:
     fqdn: caliepayne.gdex-services.k8s.ucar.edu
-    secretName: incommon-cert-caliepayne-gdex-web-services
+    secretName: incommon-cert-calie-gdex-web-services
   container:
     image: hub.k8s.ucar.edu/caliepayne-gdex-web-services-test/gdex-web-services:latest
     port: 8080
