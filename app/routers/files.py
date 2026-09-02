@@ -175,7 +175,7 @@ async def _detect_zarr_url(url: str) -> str | None:
 
 @router.get("/is-netcdf")
 async def is_netcdf(path: str = Query(..., openapi_examples=_EXAMPLE_NETCDF_OPENAPI_EXAMPLES)):
-    """Check whether a local file path or URL points to a NetCDF file."""
+    """Check whether a local file path or URL points to a NetCDF file"""
     is_url = path.startswith("http://") or path.startswith("https://")
 
     try:
