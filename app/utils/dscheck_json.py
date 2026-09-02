@@ -51,7 +51,7 @@ def _read_latest_log(cindex: int) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_message: Optional[str] = None) -> Dict[str, Any]:
+def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_message: Optional[str] = None, request_id: Optional[str] = None) -> Dict[str, Any]:
     """Retrieve and format a dscheck record with its latest processing status.
 
     Queries the dscheck database table for the given cindex and retrieves
@@ -67,11 +67,14 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
     status_message : str, optional
         Custom status message. If provided, overrides the default generated message.
         If None or not provided, generates default message based on record status.
+    request_id : str, optional
+        Unique request identifier (UUID) for tracking.
 
     Returns
     -------
     dict
         Standardized dscheck JSON with keys:
+        - request_id: Unique request identifier (if provided)
         - cindex: Record index
         - time_of_status: ISO format timestamp
         - command: Command from the dscheck record
@@ -82,7 +85,7 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
         - processing_status: Latest log entry from JSONL file (or None)
     """
     if cindex == 0:
-        return {
+        response = {
             "cindex": "N/A",
             "time_of_status": datetime.now().isoformat(),
             "command": None,
@@ -92,6 +95,9 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
             "status_message": status_message,
             "processing_status": None
         }
+        if request_id:
+            response = {"request_id": request_id, **response}
+        return response
     try:
         # Query the dscheck record
         condition = f"cindex = {cindex}"
@@ -99,7 +105,7 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
         record = db.pgget("dscheck", "*", condition, db.PGLOG['LOGMASK'])
 
         if not record:
-            return {
+            response = {
                 "cindex": cindex,
                 "time_of_status": datetime.now().isoformat(),
                 "command": None,
@@ -109,6 +115,9 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
                 "status_message": f"No dscheck record found for cindex '{cindex}'",
                 "processing_status": None
             }
+            if request_id:
+                response = {"request_id": request_id, **response}
+            return response
 
         # Get the processing status from the latest log
         processing_status = _read_latest_log(cindex)
@@ -124,7 +133,7 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
             else:
                 status_message = f"dscheck record for cindex '{cindex}' has status: {record_status}"
 
-        return {
+        response = {
             "cindex": cindex,
             "time_of_status": datetime.now().isoformat(),
             "command": record.get('COMMAND'),
@@ -135,9 +144,12 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
             "processing_status": processing_status,
             "dscheck_full_record": record
         }
+        if request_id:
+            response = {"request_id": request_id, **response}
+        return response
 
     except Exception as e:
-        return {
+        response = {
             "cindex": cindex,
             "time_of_status": datetime.now().isoformat(),
             "command": None,
@@ -148,3 +160,6 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
             "processing_status": None,
             "error": str(e)
         }
+        if request_id:
+            response = {"request_id": request_id, **response}
+        return response

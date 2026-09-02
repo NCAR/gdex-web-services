@@ -8,6 +8,7 @@ _PBS_PREFIX = "services_tmp/pbs"
 
 def _generate_pbs_script(
     payload_url: str,
+    request_id: str = None,
     job_name: str = "gdex-web-service-transform",
     account: str = "P43713000",
     ncpus: int = 1,
@@ -65,11 +66,11 @@ PAYLOAD="{payload_url}"
 
 ### SETUP .jsonl
 jsonl_dir="/glade/campaign/collections/gdex/data/exchange/Web-services/"
-output_jsonl="$jsonl_dir/$CINDEX.gdexws.jsonl"
+output_jsonl="$jsonl_dir/$REQUEST_ID.gdexws.jsonl"
 
 # Clear or create file
 > "$output_jsonl"
-echo "This is the jsonl with CINDEX:$CINDEX." >> "$output_jsonl"
+echo "This is the jsonl with REQUEST_ID:$REQUEST_ID " >> "$output_jsonl"
 echo "location of the jsonl file: $output_jsonl" >> "$output_jsonl"
 
 # Shell start message
@@ -126,7 +127,7 @@ def _upload_pbs_script(
 
 def create_pbs_script(
     payload_url: str,
-    filename: str = "transform.pbs",
+    request_id: str,
     prefix: str = _PBS_PREFIX,
     job_name: str = "gdex-web-service-transform",
     account: str = "P43713000",
@@ -142,8 +143,8 @@ def create_pbs_script(
     ----------
     payload_url : str
         HTTPS URL to the payload JSON file on Boreas.
-    filename : str, optional
-        Name of the PBS script in the object store. Default: "transform.pbs"
+    request_id : str
+        Unique request identifier (UUID) used in filename and JSONL output.
     prefix : str, optional
         S3 prefix/directory for PBS storage. Default: "services_tmp/pbs"
     job_name : str, optional
@@ -166,8 +167,10 @@ def create_pbs_script(
     str
         Public HTTPS URL to the uploaded PBS script.
     """
+    filename = f"transform.{request_id}.pbs"
     script_content = _generate_pbs_script(
         payload_url=payload_url,
+        request_id=request_id,
         job_name=job_name,
         account=account,
         ncpus=ncpus,

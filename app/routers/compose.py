@@ -8,6 +8,7 @@ from typing import Dict, Any
 from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, Query, BackgroundTasks
+import uuid
 import time
 import asyncio
 import json
@@ -70,21 +71,21 @@ async def get_status(cindex: int) -> Dict[str, Any]:
     return get_dscheck_json(cindex)
 
 
-@router.get("/log/{cindex}")
-async def get_log(cindex: int, issuer: str = Query(None)) -> Dict[str, Any]:
+@router.get("/log/{request_id}")
+async def get_log(request_id: str, issuer: str = Query(None)) -> Dict[str, Any]:
     """
     Retrieve the processing log for a transformation job.
 
-    Checks if the JSONL log file exists for the given cindex. Returns three possible
+    Checks if the JSONL log file exists for the given request_id. Returns three possible
     responses:
     1. Log exists: returns dscheck record with parsed log entries
-    2. cindex record exists but log not ready: returns dscheck record with status message
-    3. No cindex record and no log: returns error indicating no record found
+    2. No log file yet: returns status message
+    3. No log found: returns error indicating no record found
 
     Parameters
     ----------
-    cindex : int
-        The dscheck record index to retrieve logs for.
+    request_id : str
+        The unique request identifier (UUID) to retrieve logs for.
     issuer : str, optional
         Email or identifier of the person who initiated the request.
 
@@ -95,16 +96,14 @@ async def get_log(cindex: int, issuer: str = Query(None)) -> Dict[str, Any]:
 
     Examples
     --------
-    >>> curl -X GET https://api_url/compose/log/4071816
-    >>> curl -X GET "https://api_url/compose/log/4071816?issuer=user@ucar.edu"
+    >>> curl -X GET https://api_url/compose/log/550e8400-e29b-41d4-a716-446655440000
+    >>> curl -X GET "https://api_url/compose/log/550e8400-e29b-41d4-a716-446655440000?issuer=user@ucar.edu"
     """
-    log_path = Path(WORKDIR) / f"{cindex}.gdexws.jsonl"
+    log_path = Path(WORKDIR) / f"{request_id}.gdexws.jsonl"
 
     # Case 1: Log file exists
     if log_path.exists():
         try:
-            response = get_dscheck_json(cindex, issuer=issuer)
-
             # Parse JSONL file (each line is a separate JSON object)
             log_entries = []
             with open(log_path, 'r') as f:
@@ -116,21 +115,25 @@ async def get_log(cindex: int, issuer: str = Query(None)) -> Dict[str, Any]:
                         except json.JSONDecodeError:
                             log_entries.append({"error": "Invalid JSON", "raw": line})
 
-            response["log_entries"] = log_entries
+            response = {
+                "request_id": request_id,
+                "log_entries": log_entries,
+                "status_message": "Log retrieved successfully"
+            }
+            if issuer:
+                response["issuer"] = issuer
             return response
         except Exception as e:
-            return get_dscheck_json(cindex=cindex, issuer=issuer, status_message=f"Error reading log: {str(e)}")
+            return {
+                "request_id": request_id,
+                "status_message": f"Error reading log: {str(e)}"
+            }
 
-    # Case 2 & 3: Check if cindex record exists in database
-    response = get_dscheck_json(cindex, issuer=issuer)
-
-    # If we got a valid dscheck record, log is just not ready yet
-    if response.get("cindex") and response["cindex"] > 0:
-        response["status_message"] = "Processing in progress, log not yet available"
-        return response
-
-    # Case 3: No cindex record and no log
-    return get_dscheck_json(cindex=0, issuer=issuer, status_message=f"No record found for cindex {cindex}")
+    # Case 2: Log not ready yet
+    return {
+        "request_id": request_id,
+        "status_message": "Processing in progress, log not yet available"
+    }
 
 
 
@@ -182,42 +185,32 @@ async def post_transform(
     ...     ]
     ...   }'
     """
-    # # Validate file paths against base directory
-    # validation_result = relpath_validate(request.files)
-    # if validation_result is not True:
-    #     return validation_result
+    # Generate unique request ID
+    request_id = str(uuid.uuid4())
 
-    # Create and upload payload to Boreas
-    payload_url = create_transform_payload(request)
+    # Create and upload payload to Boreas with request_id in filename
+    # Format: services_tmp/payloads/transform.payload.{request_id}.json
+    payload_url = create_transform_payload(request, request_id=request_id)
 
-    # Create and upload PBS script to Boreas
-    pbs_script = create_pbs_script(payload_url)
+    # Create and upload PBS script to Boreas with request_id in filename
+    # Format: services_tmp/pbs/transform.{request_id}.pbs
+    pbs_script = create_pbs_script(payload_url, request_id=request_id)
 
     # Prepare the dscheck record for submission for pbs script download
     dict_dscheck_post = {
         'command': 'curl',
         'specialist': specialist,
-        'argv': f'-o transform.pbs "{pbs_script}"',
-        'workdir': WORKDIR,
-        'status': 'R',
+        # Download PBS script and save locally as: transform.{request_id}.pbs
+        'argv': f'-o transform.{request_id}.pbs "{pbs_script}"',
+        'workdir': WORKDIR
     }
     
     try:
         # Create PgDBI instance and add record
         db = PgDBI()
-        cindex_pbs = db.pgadd("dscheck", dict_dscheck_post, PgLOG.EXITLG|PgLOG.AUTOID|PgLOG.DODFLT)
+        cindex_download = db.pgadd("dscheck", dict_dscheck_post, PgLOG.EXITLG|PgLOG.AUTOID|PgLOG.DODFLT)
 
-        if cindex_pbs > 0:
-            # Update record with environment variables so when the script runs, it can access the cindex value
-            env_vars = f"CINDEX={cindex_pbs}"
-            record = {
-                "environments": env_vars, 
-                'argv': f'-o {cindex_pbs}.pbs "{pbs_script}"',
-                'status': "C"
-            }
-            db.pgupdt("dscheck", record, f"cindex = {cindex_pbs}", db.PGLOG['LOGMASK'])
-            # return get_dscheck_json(cindex=cindex_pbs, status_message="PBS downloading")
-        else:
+        if cindex_download <= 0:
             log = PgLOG()
             log.pglog("Fail to add dscheck record for '{}'".format(dict_dscheck_post['command']), logact=PgLOG.RETMSG)
             return get_dscheck_json(cindex=0, status_message="No cindex returned for download PBS script")
@@ -229,38 +222,38 @@ async def post_transform(
     # Submit the PBS script for execution in the background after it is downloaded, to avoid race condition
     background_tasks.add_task(
         pbs_submit,
-        cindex_pbs,
-        specialist
+        specialist,
+        request_id
     )
 
     # do not wait for the pbs_submit to finish, return the cindex_pbs for the user to check the status
-    return get_dscheck_json(cindex=cindex_pbs, status_message=f"PBS script downloading + queued for execution")
+    return get_dscheck_json(cindex=cindex_download, request_id=request_id, status_message=f"PBS script downloading + queued for execution")
 
-async def pbs_submit(cindex_pbs: int, specialist: str) -> Dict[str, Any]:
+async def pbs_submit(specialist: str, request_id: str, workdir: str = WORKDIR) -> Dict[str, Any]:
     """
     The async function to submit the PBS script for execution after it is downloaded.
 
     Parameters
     ----------
-    cindex_pbs : int
-        The cindex of the dscheck record for the PBS script download.
+    request_id : str
+        The unique request identifier used in filename.
     specialist : str
         The specialist assigned to process the job.
+    workdir : str
+        The working directory where the PBS script is located.
 
     """
     # check if the pbs script is downloaded successfully
-    # pbs_script_path = Path(WORKDIR) / f"{cindex_pbs}.pbs"
     # retry till it becomes available, or timeout after 3 mins
 
     # # local test
-    # print('Check for 3 mins, waiting for the pbs script to be downloaded to avoid race condition',flush=True)
     # timeout = 60*1
     # await asyncio.sleep(timeout)
 
     # k8s deployment
     timeout = 60*3
     start_time = time.time()
-    pbs_script_path = Path(WORKDIR) / f"{cindex_pbs}.pbs"
+    pbs_script_path = Path(workdir) / f"transform.{request_id}.pbs"
     while not pbs_script_path.exists():
         if time.time() - start_time > timeout:
             return get_dscheck_json(cindex=0, status_message=f"Failed on downloading PBS script at {pbs_script_path}")
@@ -269,35 +262,18 @@ async def pbs_submit(cindex_pbs: int, specialist: str) -> Dict[str, Any]:
 
 
     # Prepare the dscheck record for submission for pbs script download
-    # CINDEX is pass as env var directly pass through the pbs with
-    # single dscheck record with no update due to using the previous cindex_pbs
-    # this make it easier to track the status of the transform job with a single cindex
+    # REQUEST_ID is passed as env var to PBS script for JSONL filename
     dict_dscheck_post = {
         'command': 'qsub',
         'specialist': specialist,
-        'argv': f'-v CINDEX={cindex_pbs} {cindex_pbs}.pbs',
-        'workdir': WORKDIR
+        'argv': f'-v REQUEST_ID={request_id} transform.{request_id}.pbs',
+        'workdir': workdir
     }
     
     try:
         # Create PgDBI instance and add record
         db = PgDBI()
-        cindex_transform = db.pgadd("dscheck", dict_dscheck_post, PgLOG.EXITLG|PgLOG.AUTOID|PgLOG.DODFLT)
-
-        # if cindex_transform > 0:
-        #     # Update record with environment variables so when the script runs, it can access the cindex value
-        #     env_vars = f"BACKGROUND_CINDEX={cindex_transform}"
-        #     record = {
-        #         'environments': env_vars,
-        #         'argv': f'-v CINDEX={cindex_pbs},BACKGROUND_CINDEX={cindex_transform} {cindex_pbs}.pbs'
-        #     }
-        #     # add the background cindex to the argv so that the pbs script can access it and update the status of the transform job
-        #     db.pgupdt("dscheck", record, f"cindex = {cindex_pbs}", db.PGLOG['LOGMASK'])
-
-        # else:
-        #     log = PgLOG()
-        #     log.pglog("Fail to add dscheck record for '{}'".format(dict_dscheck_post['command']), logact=PgLOG.RETMSG)
-        #     return get_dscheck_json(cindex=0, status_message="No cindex returned for download PBS script")
+        cindex_submit = db.pgadd("dscheck", dict_dscheck_post, PgLOG.EXITLG|PgLOG.AUTOID|PgLOG.DODFLT)
 
     except Exception as e:
         error_msg = str(e)

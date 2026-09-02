@@ -66,7 +66,7 @@ def _upload_payload(
 
 def create_transform_payload(
     request: TransformRequest,
-    filename: str = "transform.payload.json",
+    request_id: str,
     prefix: str = _PAYLOAD_PREFIX
 ) -> str:
     """Serialize TransformRequest and upload to Boreas object store.
@@ -75,8 +75,8 @@ def create_transform_payload(
     ----------
     request : TransformRequest
         The transformation request object to upload.
-    filename : str, optional
-        Name of the file in the object store. Default: "transform.payload.json"
+    request_id : str
+        Unique request identifier (UUID) used in filename.
     prefix : str, optional
         S3 prefix/directory for payload storage. Default: "services_tmp/payloads"
 
@@ -85,5 +85,6 @@ def create_transform_payload(
     str
         Public HTTPS URL to the uploaded payload.
     """
+    filename = f"transform.payload.{request_id}.json"
     payload_dict = _serialize_transform_request(request)
     return _upload_payload(payload_dict, filename=filename, prefix=prefix)
