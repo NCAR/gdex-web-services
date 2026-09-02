@@ -1,0 +1,37 @@
+replicaCount: 1
+
+webapp:
+  name: gdex-webservices
+  group: gdex-web-services
+  path: /
+  tls:
+    fqdn: caliepayne.gdex-services.k8s.ucar.edu
+    secretName: incommon-cert-caliepayne-gdex-web-services
+  container:
+    image: hub.k8s.ucar.edu/caliepayne-gdex-web-services-test/gdex-web-services:latest
+    port: 8080
+    requests:
+      memory: 1Gi
+      cpu: 1
+    limits:
+      memory: 4Gi
+      cpu: 2
+    responseTimeout: 60
+    maxUploadSize: 10m
+  ingress:
+    ingressClassName: nginx-internal
+  volume:
+    name: campaign
+    server: gladedm1.ucar.edu
+    path: /glade/campaign/
+    mountPath: /glade/campaign/
+    readOnly: true
+  # Name of the Kubernetes Secret (created out-of-band via kubectl, not
+  # managed by this chart) holding the object store credentials. Must
+  # contain the keys access_key_id and secret_key.
+  objectStore:
+    secretName: boreas
+  baoToken:
+    existingSecret: 
+      name : baotoken  # reference existing secret named BAOTOKEN
+      key : token      # the key inside that secret
