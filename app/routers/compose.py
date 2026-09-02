@@ -209,6 +209,9 @@ async def post_transform(
     # Generate unique request ID
     # request_id = str(uuid.uuid4())
     request_id = '8952b481-bfe9-4e34-b957-94009c47060d'
+    logger, log_file = setup_request_logger(request_id)
+
+    logger.info(f"POST /transform request received - issuer: {issuer}, specialist: {specialist}")
 
     # Create and upload payload to Boreas with request_id in filename
     # Format: services_tmp/payloads/transform.payload.{request_id}.json
@@ -220,6 +223,9 @@ async def post_transform(
     # pbs_url = create_pbs_script(payload_url, request_id=request_id)
     pbs_url = 'https://boreas.hpc.ucar.edu/gdex-data/services_tmp/pbs/transform.8952b481-bfe9-4e34-b957-94009c47060d.pbs'
 
+    logger.info(f"Payload URL: {payload_url}")
+    logger.info(f"PBS URL: {pbs_url}")
+
     # Prepare the dscheck record for submission for pbs script download
     dict_dscheck_post = {
         'command': 'curl',
@@ -229,22 +235,29 @@ async def post_transform(
         'environments': f'DOWNLOAD_URL={pbs_url}',
         'workdir': WORKDIR
     }
-    
+
     try:
         # Create PgDBI instance and add record
+        logger.info(f"Adding dscheck record for curl download command")
         db = PgDBI()
         cindex_download = db.pgadd("dscheck", dict_dscheck_post, PgLOG.EXITLG|PgLOG.AUTOID|PgLOG.DODFLT)
 
         if cindex_download <= 0:
+            logger.error("Failed: dscheck returned invalid cindex")
             log = PgLOG()
             log.pglog("Fail to add dscheck record for '{}'".format(dict_dscheck_post['command']), logact=PgLOG.RETMSG)
             return get_dscheck_json(cindex=0, status_message="No cindex returned for download PBS script")
 
+        logger.info(f"PBS download task created with cindex: {cindex_download}")
+
     except Exception as e:
         error_msg = str(e)
+        logger.error(f"Failed to add dscheck record: {error_msg}")
+        logger.exception(f"Exception details: {e}")
         return get_dscheck_json(cindex=0, status_message="Failed on dscheck update info") | {"error": error_msg}
 
     # Submit the PBS script for execution in the background after it is downloaded, to avoid race condition
+    logger.info("Submitting PBS submission task to background queue")
     background_tasks.add_task(
         pbs_submit,
         specialist,
@@ -252,6 +265,7 @@ async def post_transform(
     )
 
     # do not wait for the pbs_submit to finish, return the cindex_pbs for the user to check the status
+    logger.info("Returning response to user with cindex_download")
     return get_dscheck_json(cindex=cindex_download, request_id=request_id, status_message=f"PBS script downloading + queued for execution")
 
 async def pbs_submit(specialist: str, request_id: str, workdir: str = WORKDIR) -> Dict[str, Any]:
