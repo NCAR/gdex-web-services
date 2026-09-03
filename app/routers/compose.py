@@ -44,10 +44,19 @@ def setup_request_logger(request_id: str):
 
     logger = logging.getLogger(f"request.{request_id}")
     logger.handlers.clear()  # Clear any existing handlers
-    handler = logging.FileHandler(log_file)
+
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+
+    # File handler - write to disk
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    # Console handler - also output to docker logs
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
     logger.setLevel(logging.DEBUG)
 
     return logger, log_file
@@ -207,21 +216,20 @@ async def post_transform(
     
     """
     # Generate unique request ID
-    # request_id = str(uuid.uuid4())
-    request_id = '8952b481-bfe9-4e34-b957-94009c47060d'
+    request_id = str(uuid.uuid4())
     logger, log_file = setup_request_logger(request_id)
 
     logger.info(f"POST /transform request received - issuer: {issuer}, specialist: {specialist}")
 
     # Create and upload payload to Boreas with request_id in filename
     # Format: services_tmp/payloads/transform.payload.{request_id}.json
-    # payload_url = create_transform_payload(request, request_id=request_id)
-    payload_url = 'https://boreas.hpc.ucar.edu/gdex-data/services_tmp/payloads/transform.payload.8952b481-bfe9-4e34-b957-94009c47060d.json'
+    payload_url = create_transform_payload(request, request_id=request_id)
+    # payload_url = f'https://boreas.hpc.ucar.edu/gdex-data/services_tmp/payloads/transform.payload.{request_id}.json'
 
     # Create and upload PBS script to Boreas with request_id in filename
     # Format: services_tmp/pbs/transform.{request_id}.pbs
-    # pbs_url = create_pbs_script(payload_url, request_id=request_id)
-    pbs_url = 'https://boreas.hpc.ucar.edu/gdex-data/services_tmp/pbs/transform.8952b481-bfe9-4e34-b957-94009c47060d.pbs'
+    pbs_url = create_pbs_script(payload_url, request_id=request_id)
+    # pbs_url = f'https://boreas.hpc.ucar.edu/gdex-data/services_tmp/pbs/transform.{request_id}.pbs'
 
     logger.info(f"Payload URL: {payload_url}")
     logger.info(f"PBS URL: {pbs_url}")
@@ -292,7 +300,7 @@ async def pbs_submit(specialist: str, request_id: str, workdir: str = WORKDIR) -
         # retry till it becomes available, or timeout after 3 mins
 
         # # local test
-        # timeout = 60*1
+        # timeout = 60*2
         # await asyncio.sleep(timeout)
 
         # k8s deployment
@@ -305,7 +313,7 @@ async def pbs_submit(specialist: str, request_id: str, workdir: str = WORKDIR) -
                 error_occurred = True
                 raise RuntimeError(f"Failed on downloading PBS script at {pbs_script_path}")
             await asyncio.sleep(10)
-
+        
         logger.info(f"PBS script downloaded successfully at {pbs_script_path}")
 
         # Prepare the dscheck record for submission for pbs script download
@@ -313,10 +321,12 @@ async def pbs_submit(specialist: str, request_id: str, workdir: str = WORKDIR) -
         dict_dscheck_post = {
             'command': 'qsub',
             'specialist': specialist,
-            'argv': f'-v REQUEST_ID={request_id} transform.{request_id}.pbs',
+            'argv': f'-v REQUEST_ID transform.{request_id}.pbs',
+            'environments': f'REQUEST_ID={request_id}',
             'workdir': workdir
         }
-
+        logger.debug(f"record for dscheck : dict_dscheck_post= {dict_dscheck_post}")
+        
         try:
             # Create PgDBI instance and add record
             db = PgDBI()
