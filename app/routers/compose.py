@@ -168,7 +168,7 @@ async def get_log(request_id: str, issuer: str = Query(None)) -> Dict[str, Any]:
 
 @router.post("/transform")
 async def post_transform(
-    # request: TransformRequest,
+    request: TransformRequest,
     background_tasks: BackgroundTasks,
     issuer: str = Query(None),
     specialist: str = Query("chiaweih")
