@@ -31,5 +31,3 @@ webapp:
   # contain the keys access_key_id and secret_key.
   objectStore:
     secretName: boreas
-  externalSecret:
-    baoPath: kv/gdex/pgdb01
