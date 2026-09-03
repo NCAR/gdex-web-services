@@ -1,3 +1,4 @@
+import json
 import sys
 from datetime import datetime
 from typing import Dict, Any
@@ -78,4 +79,4 @@ def service_log(command_name: str, level: str, process_message: str, **kwargs) -
         process_message=process_message,
         **kwargs
     )
-    print(log_dict, file=sys.stdout, flush=True)
+    print(json.dumps(log_dict), file=sys.stdout, flush=True)
