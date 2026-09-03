@@ -72,16 +72,26 @@ spec:
             secretKeyRef:
               name: {{ .Values.webapp.objectStore.secretName }}
               key: secret_key
-        - name: BAOTOKEN
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.webapp.baoToken.existingSecret.name }}
-              key: {{ .Values.webapp.baoToken.existingSecret.key }}
         - name: PGDB01_PASSWORD
           valueFrom:
             secretKeyRef:
               name: {{ .Values.webapp.pgdb01Secret.existingSecret.name }}
-              key: {{ .Values.webapp.pgdb01Secret.existingSecret.key }}
+              key: password
+        - name: PGDB01_DSSDBPASS
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.webapp.pgdb01Secret.existingSecret.name }}
+              key: dssdbpass
+        - name: PGDB01_METAPASS
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.webapp.pgdb01Secret.existingSecret.name }}
+              key: metapass
+        - name: PGDB01_WAGTAILPASS
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.webapp.pgdb01Secret.existingSecret.name }}
+              key: wagtailpass
         volumeMounts:
         - mountPath: {{ .Values.webapp.volume.mountPath }}
           name: {{ .Values.webapp.volume.name }}

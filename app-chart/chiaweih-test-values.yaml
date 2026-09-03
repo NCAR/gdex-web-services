@@ -32,11 +32,7 @@ webapp:
   objectStore:
     secretName: boreas
   pgdb01Secret:
-    existingSecret: 
-      name : pgdb01-superuser  # reference existing secret named PGDB01
-      key : password      # the key inside that secret
-  baoToken:
-    existingSecret: 
-      name : baotoken  # reference existing secret named BAOTOKEN
-      key : token      # the key inside that secret
-
+    existingSecret:
+      name: pgdb0102-superuser  # reference existing secret named PGDB01
+  externalSecret:
+    baoPath: kv/gdex/pgdb01
