@@ -16,7 +16,7 @@ async def list_datasets():
 
 @router.get("/{dataset_id}")
 async def get_dataset(dataset_id: str):
-    """Return metadata for a specific dataset."""
+    """Return metadata for a specific dataset"""
     return {
         "id": dataset_id,
         "title": f"Dataset {dataset_id}",
