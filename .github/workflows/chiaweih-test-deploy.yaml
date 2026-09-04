@@ -1,0 +1,62 @@
+# Test workflow for chiaweih branch
+# IMPORTANT: For this workflow to work, app-chart/values.yaml must point to :latest tag
+# Example: image: hub.k8s.ucar.edu/chiaweih-gdex-web-services-test/gdex-web-services:latest
+# This allows the workflow to push new test images with :latest tag and have them automatically deployed
+
+on:
+  push:
+    branches:
+      - chiaweih/*
+    paths-ignore:
+      - ".github/**"
+      - ".gitignore"
+      - "app-chart/**"
+
+env:
+  REGISTRY_PATH: hub.k8s.ucar.edu/chiaweih-gdex-web-services-test
+  IMAGE_NAME: gdex-web-services
+  VERSION_NUMBER: ${{ github.run_id }}
+
+jobs:
+  container-rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.CHIAWEIH_HARBOR_USERNAME }}
+          password: ${{ secrets.CHIAWEIH_HARBOR_PASSWORD }}
+          registry: ${{ env.REGISTRY_PATH }}
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          ssh-key: ${{ secrets.ACTIONS_PUSH_KEY }}
+      - name: Build a new version of container
+        run: >
+          docker build --platform linux/amd64
+          --build-arg VERSION_NUMBER=${{ env.VERSION_NUMBER }}
+          -t ${{ env.REGISTRY_PATH }}/${{ env.IMAGE_NAME }}:v${{ env.VERSION_NUMBER }}
+          --no-cache -f Dockerfile .
+      - name: Push the new image to Harbor
+        run: |
+          git branch
+          docker push ${{ env.REGISTRY_PATH }}/${{ env.IMAGE_NAME }}:v${{ env.VERSION_NUMBER }}
+          docker tag ${{ env.REGISTRY_PATH }}/${{ env.IMAGE_NAME }}:v${{ env.VERSION_NUMBER }} ${{ env.REGISTRY_PATH }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.REGISTRY_PATH }}/${{ env.IMAGE_NAME }}:latest
+
+          #
+          ##
+          # Just use :latest tag
+          # No need to increment version
+          ##
+          #  - name: Update the Helm chart
+          #    run: |
+          #      git config user.email "${{ secrets.GIT_CONFIG_USER_EMAIL_RILEY }}"
+          #      git config user.name "${{ secrets.GIT_CONFIG_USER_NAME_RILEY }}"
+          #      git branch
+          #      sed -E "/image/s/gdex-web-portal:(.){1,}/gdex-web-portal:v${{ github.run_id }}/" app-chart/values.yaml.riley > app-chart/riley-values.yaml.new
+          #      mv app-chart/riley-values.yaml.new app-chart/values.yaml.riley
+          #      git add app-chart/values.yaml.riley
+          #      git commit -m "increment version"
+          #      git push

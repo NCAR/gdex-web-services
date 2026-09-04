@@ -5,10 +5,10 @@ webapp:
   group: gdex-web-services
   path: /
   tls:
-    fqdn: gdex-services.k8s.ucar.edu
-    secretName: incommon-cert-gdex-web-services
+    fqdn: chiaweih.gdex-services.k8s.ucar.edu
+    secretName: incommon-cert-chiaweih-gdex-web-services
   container:
-    image: hub.k8s.ucar.edu/riley_gdex_test/gdex-web-services:v29599529390
+    image: hub.k8s.ucar.edu/chiaweih-gdex-web-services-test/gdex-web-services:latest
     port: 8080
     requests:
       memory: 1Gi
