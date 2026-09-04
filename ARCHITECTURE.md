@@ -10,27 +10,29 @@ A curation task (e.g. "add a global attribute to this NetCDF file") crosses thre
 
 ```mermaid
 flowchart TD
-    U["User / client<br/>submits JSON: files + commands<br/>e.g. add_global_meta"]
-    U -->|"POST /compose/transform"| R
+    U["User / client<br/>JSON: files + commands<br/>e.g. add_global_meta"] -->|"POST /compose/transform"| R
 
     subgraph API["API server — app/ (Kubernetes pod)"]
-        direction TB
         R["compose router<br/>routers/compose.py"]
-        R --> PL["compose payload + PBS script<br/>utils/payload.py, utils/pbs.py"]
-        PL --> DS["enqueue dscheck records:<br/>1) curl — download PBS script<br/>2) qsub — submit job<br/>(background task, after<br/>download is confirmed)"]
+        R --> PL["create_transform_payload()<br/>utils/payload.py"]
+        R --> PB["create_pbs_script()<br/>utils/pbs.py"]
+        R --> D1["dscheck record: curl<br/>(download the PBS script)"]
+        R --> D2["dscheck record: qsub<br/>(submit the PBS job,<br/>as a background task once<br/>the download is confirmed)"]
     end
 
     PL --> BOREAS[("Boreas object store<br/>transform.payload.{id}.json<br/>transform.{id}.pbs")]
-    DS --> Q[("dscheck queue<br/>Postgres, via PgDBI")]
+    PB --> BOREAS
+
+    D1 --> Q[("dscheck queue<br/>Postgres, via PgDBI")]
+    D2 --> Q
 
     Q ==>|"picked up by the<br/>dscheck daemon"| HPC
 
     subgraph HPC["NCAR HPC — PBS / Casper"]
-        direction TB
-        C["curl downloads<br/>transform.{id}.pbs"]
-        C --> S["qsub submits the job"]
+        C["curl downloads<br/>transform.{id}.pbs"] --> S["qsub submits the job"]
         S --> J["PBS job starts:<br/>activates the gdexws<br/>Python venv"]
-        J --> T["transform -p PAYLOAD_URL<br/>gdexws/composers/transform.py<br/>(reads payload directly<br/>from Boreas via HTTPS)"]
+        J --> T["transform -p PAYLOAD_URL<br/>gdexws/composers/transform.py"]
+        T -->|"direct HTTPS read"| BOREAS
         T --> LOOP["for each file, for each command<br/>(strict serial order)"]
         LOOP --> TOOL["gdexws CLI tool<br/>e.g. add-global-meta<br/>gdexws/tools/*.py"]
         TOOL --> LOG[("{id}.gdexws.jsonl<br/>/glade campaign store")]
