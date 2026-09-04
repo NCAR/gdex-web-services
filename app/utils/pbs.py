@@ -60,7 +60,6 @@ def _generate_pbs_script(
 module --force purge
 {env_activation}
 
-
 ### Parse positional arguments
 PAYLOAD="{payload_url}"
 
@@ -70,12 +69,12 @@ output_jsonl="$jsonl_dir/$REQUEST_ID.gdexws.jsonl"
 
 # Clear or create file
 > "$output_jsonl"
-echo "This is the jsonl with REQUEST_ID:$REQUEST_ID " >> "$output_jsonl"
-echo "location of the jsonl file: $output_jsonl" >> "$output_jsonl"
 
 # Shell start message
 time_iso=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "process_message": "PBS job started"}}' >> "$output_jsonl"
+echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "process_message": "This is the jsonl with REQUEST_ID:$REQUEST_ID "}}' >> "$output_jsonl"
+echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "process_message": "jsonl location: $output_jsonl "}}' >> "$output_jsonl"
 
 # Execute transform (the payload can be Boreas link)
 transform -p "$PAYLOAD" >> "$output_jsonl"
