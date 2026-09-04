@@ -67,9 +67,9 @@ async def get_status(cindex: int) -> Dict[str, Any]:
     """
     Retrieve dscheck status and latest processing output for a specific cindex.
 
-    Queries the dscheck database record and retrieves the latest log entry
-    from the corresponding JSONL file. Returns standardized JSON with current
-    status and processing information.
+    Queries the dscheck database record for the given cindex. Returns
+    standardized JSON with the record's current status. For the job's own
+    processing log, see GET /compose/log/{request_id}.
 
     Parameters
     ----------
@@ -89,7 +89,6 @@ async def get_status(cindex: int) -> Dict[str, Any]:
         - specialist: Specialist assigned to record
         - issuer: Issuer identifier (if provided)
         - status_message: Human-readable status message
-        - processing_status: Latest log entry from JSONL
         - error: Error message (if applicable)
 
     Examples

@@ -1,7 +1,5 @@
 """Utility functions for dscheck record formatting and retrieval."""
 
-import json
-import subprocess
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -14,48 +12,10 @@ except ImportError as e:
     ) from e
 
 
-def _read_latest_log(cindex: int) -> Optional[Dict[str, Any]]:
-    """Read the latest log entry from the JSONL file for a given cindex.
-
-    Parameters
-    ----------
-    cindex : int
-        The dscheck record index to read logs for.
-
-    Returns
-    -------
-    dict or None
-        The parsed JSON object from the last line of the JSONL file,
-        or None if the file cannot be read or parsed.
-    """
-    log_path = f"/glade/campaign/collections/gdex/data/exchange/Web-services/{cindex}.gdexws.jsonl"
-
-    try:
-        result = subprocess.run(
-            ["tail", "-1", log_path],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=True
-        )
-        if result.returncode == 0:
-            return json.loads(result.stdout.strip())
-        return None
-    except json.JSONDecodeError:
-        return None
-    except FileNotFoundError:
-        return None
-    except subprocess.TimeoutExpired:
-        return None
-    except Exception:
-        return None
-
-
 def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_message: Optional[str] = None, request_id: Optional[str] = None) -> Dict[str, Any]:
-    """Retrieve and format a dscheck record with its latest processing status.
+    """Retrieve and format a dscheck record.
 
-    Queries the dscheck database table for the given cindex and retrieves
-    the latest log entry from the corresponding JSONL file. Returns a
+    Queries the dscheck database table for the given cindex and returns a
     standardized JSON object with all relevant information.
 
     Parameters
@@ -82,7 +42,6 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
         - specialist: Specialist assigned to the record
         - issuer: Issuer identifier (or None if not provided)
         - status_message: Human-readable status message (custom or auto-generated)
-        - processing_status: Latest log entry from JSONL file (or None)
     """
     if cindex == 0:
         response = {
@@ -93,7 +52,6 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
             "specialist": None,
             "issuer": issuer,
             "status_message": status_message,
-            "processing_status": None
         }
         if request_id:
             response = {"request_id": request_id, **response}
@@ -113,14 +71,10 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
                 "specialist": None,
                 "issuer": issuer,
                 "status_message": f"No dscheck record found for cindex '{cindex}'",
-                "processing_status": None
             }
             if request_id:
                 response = {"request_id": request_id, **response}
             return response
-
-        # Get the processing status from the latest log
-        processing_status = _read_latest_log(cindex)
 
         # Determine status message: use provided or generate default
         if status_message is None:
@@ -141,7 +95,6 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
             "specialist": record.get('SPECIALIST'),
             "issuer": issuer,
             "status_message": status_message,
-            "processing_status": processing_status,
             "dscheck_full_record": record
         }
         if request_id:
@@ -157,7 +110,6 @@ def get_dscheck_json(cindex: int = 0, issuer: Optional[str] = None, status_messa
             "specialist": None,
             "issuer": issuer,
             "status_message": "Failed to retrieve dscheck record",
-            "processing_status": None,
             "error": str(e)
         }
         if request_id:
