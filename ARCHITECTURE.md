@@ -10,17 +10,22 @@ A curation task (e.g. "add a global attribute to this NetCDF file") crosses thre
 
 ```mermaid
 flowchart TD
-    U["User / client<br/>JSON: files + commands<br/>e.g. add_global_meta"] -->|"POST /compose/transform"| R
+    U["User / client"] -->|"POST /compose/transform<br/>JSON: files + commands"| R
+    U -->|"GET /files/metadata<br/>GET /files/format<br/>GET /datasets/list<br/>(metadata, info queries)"| META
 
     subgraph API["API server — app/ (Kubernetes pod)"]
-        R["compose router<br/>routers/compose.py"]
+        R["compose router<br/>routers/compose.py<br/>(FILE MANIPULATION)"]
+        META["metadata/info routers<br/>routers/files.py<br/>routers/datasets.py<br/>(READ-ONLY, NO MANIPULATION)"]
+        
         R --> PL["create_transform_payload()<br/>utils/payload.py"]
         R --> PB["create_pbs_script()<br/>utils/pbs.py"]
         R --> D1["dscheck record: curl<br/>(download the PBS script)"]
-        R --> D2["dscheck record: qsub<br/>(submit the PBS job,<br/>as a background task once<br/>the download is confirmed)"]
+        R --> D2["dscheck record: qsub<br/>(submit the PBS job,<br/>as a background task)"]
+        
+        META --> GLADE_READ["Direct HTTPS read<br/>to /glade storage<br/>Extract metadata<br/>NetCDF headers, etc."]
     end
 
-    PL --> BOREAS[("Boreas object store<br/>transform.payload.{id}.json<br/>transform.{id}.pbs")]
+    PL --> BOREAS[("Boreas object store<br/>transform.payload.{request_id}.json<br/>transform.{request_id}.pbs")]
     PB --> BOREAS
 
     D1 --> Q[("dscheck queue<br/>Postgres, via PgDBI")]
@@ -28,14 +33,16 @@ flowchart TD
 
     Q ==>|"picked up by the<br/>dscheck daemon"| HPC
 
+    GLADE_READ -->|"direct read<br/>(no PBS)"| GLADE[("Glade storage<br/>campaign data")]
+    
     subgraph HPC["NCAR HPC — PBS / Casper"]
-        C["curl downloads<br/>transform.{id}.pbs"] --> S["qsub submits the job"]
+        C["curl downloads<br/>transform.{request_id}.pbs"] --> S["qsub submits the job"]
         S --> J["PBS job starts:<br/>activates the gdexws<br/>Python venv"]
         J --> T["transform -p PAYLOAD_URL<br/>gdexws/composers/transform.py"]
         T -->|"direct HTTPS read"| BOREAS
         T --> LOOP["for each file, for each command<br/>(strict serial order)"]
         LOOP --> TOOL["gdexws CLI tool<br/>e.g. add-global-meta<br/>gdexws/tools/*.py"]
-        TOOL --> LOG[("{id}.gdexws.jsonl<br/>/glade campaign store")]
+        TOOL --> LOG[("{request_id}.gdexws.jsonl<br/>/glade campaign store")]
     end
 
     LOG -.->|"read by"| ST["GET /compose/log/{request_id}<br/>routers/compose.py"]
