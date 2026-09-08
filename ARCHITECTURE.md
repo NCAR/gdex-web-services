@@ -22,7 +22,7 @@ flowchart TD
         R --> D1["dscheck record: curl<br/>(download the PBS script)"]
         R --> D2["dscheck record: qsub<br/>(submit the PBS job,<br/>as a background task)"]
         
-        META --> GLADE_READ["Direct HTTPS read<br/>to /glade storage<br/>Extract metadata<br/>NetCDF headers, etc."]
+        META --> GLADE_READ["Direct read<br/>to mounted /glade storage<br/>Extract metadata<br/>NetCDF headers, etc."]
     end
 
     PL --> BOREAS[("Boreas object store<br/>transform.payload.{request_id}.json<br/>transform.{request_id}.pbs")]
