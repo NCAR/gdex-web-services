@@ -7,3 +7,6 @@ netCDF4==1.7.2
 cfgrib==0.9.15.1
 matplotlib==3.11.0
 boto3==1.43.47
+rda_python_common[psycopg2-binary]==3.0.6
+
+
