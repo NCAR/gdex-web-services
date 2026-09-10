@@ -489,6 +489,69 @@ async def _check_url_accessible(url: str) -> dict:
     }
 
 
+def _directory_size(root: Path) -> int:
+    """Recursively sum the size in bytes of every file under `root`.
+
+    Mirrors _scan_directory's walk (symlinks not followed), but totals sizes
+    instead of checking permissions. Files that vanish or become unreadable
+    mid-walk are skipped rather than failing the whole scan.
+    """
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
+        for fname in filenames:
+            try:
+                total += (Path(dirpath) / fname).stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+async def _url_size(url: str) -> int | None:
+    """Get the size in bytes of a remote resource from its Content-Length header.
+
+    Returns None if the server doesn't report Content-Length (e.g. chunked
+    transfer encoding), since size can't be determined without downloading
+    the resource.
+    """
+    async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
+        resp = await client.head(url)
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"Failed to reach URL: HTTP {resp.status_code}")
+        content_length = resp.headers.get("content-length")
+        return int(content_length) if content_length is not None else None
+
+
+@router.get("/size")
+async def file_size(path: str = Query(..., openapi_examples=_EXAMPLE_NETCDF_OPENAPI_EXAMPLES)):
+    """Get the total size in bytes of a local file, local directory, or URL.
+
+    A local directory's size is the recursive sum of its files, computed the
+    same way GET /files/check-access walks a directory (symlinks not
+    followed). A URL's size comes from the Content-Length header of a HEAD
+    request, and is null if the server doesn't report one.
+    """
+    is_url = path.startswith("http://") or path.startswith("https://")
+    if is_url:
+        try:
+            size_bytes = await _url_size(path)
+        except HTTPException:
+            raise
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=f"Failed to reach URL: {e}")
+        return {"path": path, "is_directory": False, "size_bytes": size_bytes}
+
+    p = Path(path)
+    if not p.exists():
+        raise HTTPException(status_code=404, detail=f"Path not found: {path}")
+
+    if p.is_dir():
+        size_bytes = await asyncio.to_thread(_directory_size, p)
+        return {"path": path, "is_directory": True, "size_bytes": size_bytes}
+
+    size_bytes = p.stat().st_size
+    return {"path": path, "is_directory": False, "size_bytes": size_bytes}
+
+
 @router.get("/check-access")
 async def check_access(
     path: str = Query(..., openapi_examples=_EXAMPLE_NETCDF_OPENAPI_EXAMPLES),
@@ -525,3 +588,27 @@ async def check_access(
 
     ok, reason = await asyncio.to_thread(_check_globally_readable, p)
     return {"path": path, "recursive": False, "globally_readable": ok, "reason": reason}
+
+@router.get("/get-data-size")
+async def get_data_size(
+    path: str = Query(..., openapi_examples=_EXAMPLE_NETCDF_OPENAPI_EXAMPLES),
+    recursive: bool = False,
+    max_results: int = Query(default=100, ge=1, le=10000),
+):
+    is_url = path.startswith("http://") or path.startswith("https://")
+    if is_url:
+        return {
+            "error": "unsupported_endpoint",
+            "message": "The provided endpoint is a URL, but this function only supports endpoint paths on /glade.",
+            "endpoint": path
+            }
+
+    p = Path(path)
+    if p.is_dir() and recursive:
+        return {
+            "message": "A recursive directory. "
+        }
+
+    return {"path": path, "recursive": False}
+
+    
