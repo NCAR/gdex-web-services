@@ -1,5 +1,6 @@
 from app.celery_app import app
 
 @app.task
-def hello_world():
-  print("Hello World!")
+def test_task():
+  print("Hello from Celery!")
+  return "Yo, Celery is working!"
