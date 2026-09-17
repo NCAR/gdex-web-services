@@ -8,5 +8,7 @@ cfgrib==0.9.15.1
 matplotlib==3.11.0
 boto3==1.43.47
 rda_python_common[psycopg2-binary]==3.0.6
+celery==5.5.3
+redis==6.4.0
 
 
