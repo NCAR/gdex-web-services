@@ -10,7 +10,7 @@ on:
     paths-ignore:
       - ".github/**"
       - ".gitignore"
-#      - "app-chart/**"
+      - "app-chart/**"
 
 env:
   REGISTRY_PATH: hub.k8s.ucar.edu/caliepayne-gdex-web-services-test
