@@ -1,6 +1,6 @@
-from app.celery_app import app
+from app.celery_worker import celery_app
 
-@app.task
+@celery_app.task
 def test_task():
   print("Hello from Celery!")
   return "Yo, Celery is working!"
