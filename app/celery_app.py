@@ -5,5 +5,5 @@ app = Celery(
   broker="redis://redis:6379/0"
 )
 
-# import files that contain celery tasks
+# import files that contain celery related tasks
 import app.tasks
