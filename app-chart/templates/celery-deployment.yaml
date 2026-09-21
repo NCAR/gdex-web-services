@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
       - name: celery
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        image: "{{ .Values.webapp.container.image }}"
         command:
           - celery
           - -A
