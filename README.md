@@ -52,3 +52,7 @@ helm upgrade --install gdex-webservices ./app-chart -n <namespace>
 # Deploy a test instance
 helm upgrade --install gdex-webservices ./app-chart -n <namespace> --set testName=<your-name>
 ```
+
+## gdexws
+
+[`gdexws`](gdexws/) is a Python package providing CLI commands used for data curation on the NCAR HPC system. These commands are triggered and used by the API endpoints. See the [gdexws README](gdexws/README.md) for installation and usage.
