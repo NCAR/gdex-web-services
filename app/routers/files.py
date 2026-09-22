@@ -589,26 +589,20 @@ async def check_access(
     ok, reason = await asyncio.to_thread(_check_globally_readable, p)
     return {"path": path, "recursive": False, "globally_readable": ok, "reason": reason}
 
+
+##############################################################
+###################### CELERY ENDPOINTS ######################
+##############################################################
+from celery import chain
+from app.tasks import check_recursive_task, compute_size_task
+
+
 @router.get("/get-data-size")
-async def get_data_size(
-    path: str = Query(..., openapi_examples=_EXAMPLE_NETCDF_OPENAPI_EXAMPLES),
-    recursive: bool = False,
-    max_results: int = Query(default=100, ge=1, le=10000),
-):
-    is_url = path.startswith("http://") or path.startswith("https://")
-    if is_url:
-        return {
-            "error": "unsupported_endpoint",
-            "message": "The provided endpoint is a URL, but this function only supports endpoint paths on /glade.",
-            "endpoint": path
-            }
+def get_data_size(path: str):
+    workflow = chain(check_recursive_task.s(path), compute_size_task.s())
+    task = workflow.delay()
 
-    p = Path(path)
-    if p.is_dir() and recursive:
-        return {
-            "message": "A recursive directory. "
-        }
-
-    return {"path": path, "recursive": False}
-
-    
+    return {
+        "task_id": task.id,
+        "status": "submitted"
+    }

@@ -4,16 +4,6 @@ from app.tasks import test_task
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 
-@router.get("/test-celery")
-def test_celery():
-    task = test_task.delay()
-
-    return {
-        "task_id": task.id,
-        "status": "submitted"
-    }
-
-
 @router.get("/")
 async def list_datasets():
     """Return a list of available datasets."""
