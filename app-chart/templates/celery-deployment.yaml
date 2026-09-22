@@ -16,6 +16,12 @@ spec:
       labels:
         app: celery
     spec:
+      volumes:
+      - name: {{ .Values.webapp.volume.name }}
+        nfs:
+          server: {{ .Values.webapp.volume.server }}
+          path: {{ .Values.webapp.volume.path }}
+          readOnly: {{ .Values.webapp.volume.readOnly }}
       containers:
       - name: celery
         image: "{{ .Values.webapp.container.image }}"
@@ -32,3 +38,7 @@ spec:
           requests:
             cpu: "0.5"
             memory: 1Gi
+        volumeMounts:
+        - mountPath: {{ .Values.webapp.volume.mountPath }}
+          name: {{ .Values.webapp.volume.name }}
+          readOnly: {{ .Values.webapp.volume.readOnly }}
