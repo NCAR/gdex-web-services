@@ -17,6 +17,15 @@ def test_celery():
 @router.get("/task-status/{task_id}")
 def task_status(task_id: str):
     result = AsyncResult(task_id, app=celery_app)
+
+    if result.failed():
+        return {
+            "task_id": task_id,
+            "status": result.status,
+            "result": str(result.result),
+            "traceback": result.traceback,
+        }
+
     return {
         "task_id": task_id,
         "status": result.status,   # PENDING, STARTED, SUCCESS, FAILURE, etc.
