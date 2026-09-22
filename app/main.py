@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from app.routers import datasets, files, generators, compose
+from app.routers import datasets, files, generators, compose, celery_tasks
 
 app = FastAPI(
     title="GDEX Web Services",
@@ -11,6 +11,7 @@ app.include_router(datasets.router)
 app.include_router(files.router)
 app.include_router(generators.router)
 app.include_router(compose.router)
+app.include_router(celery_tasks.router)
 
 
 @app.get("/")
