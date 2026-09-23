@@ -5,7 +5,7 @@ celery_app = Celery(
   broker = "redis://redis:6379/0",
   backend = "redis://redis:6379/1", 
 )
-celery_app.conf.result_expires = 3600  # seconds
+celery_app.conf.result_expires = 86400  # seconds
 
 # import files that contain celery related tasks
 import app.tasks

@@ -14,6 +14,7 @@ def test_celery():
         "status": "submitted"
     }
 
+
 @router.get("/task-status/{task_id}")
 def task_status(task_id: str):
     result = AsyncResult(task_id, app=celery_app)
