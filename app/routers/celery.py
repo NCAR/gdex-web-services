@@ -22,6 +22,7 @@ def task_status(task_id: str):
     if result.failed():
         return {
             "task_id": task_id,
+            "task_type": "celery",  # celery vs pbs
             "status": result.status,
             "result": str(result.result),
             "traceback": result.traceback,
@@ -29,6 +30,7 @@ def task_status(task_id: str):
 
     return {
         "task_id": task_id,
+        "task_type": "celery", # celery vs pbs
         "status": result.status,   # PENDING, STARTED, SUCCESS, FAILURE, etc.
         "result": result.result if result.ready() else None,
     }
