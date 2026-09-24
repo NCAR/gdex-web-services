@@ -1,7 +1,8 @@
 """Transform script that executes commands on files based on a payload JSON."""
 import sys
-import argparse
 from gdexws.utils import load_payload, build_command, execute_command, service_log
+
+DESCRIPTION = "Execute commands on files based on a payload JSON"
 
 
 def transform(payload_path: str) -> None:
@@ -107,14 +108,13 @@ def transform(payload_path: str) -> None:
                 )
                 sys.exit(1)
 
-def main():
-    """CLI entry point."""
-    parser = argparse.ArgumentParser(
-        description="Execute commands on files based on a payload JSON"
-    )
-    parser.add_argument("-p", "--payload", help="Path to the payload JSON file", required=True)
-    args = parser.parse_args()
+def add_arguments(parser):
+    """Declare CLI arguments on the `transform` subparser."""
+    parser.add_argument("-p", "--payload", help="Path or URL of the payload JSON file", required=True)
 
+
+def run(args):
+    """Execute the composer with parsed arguments."""
     service_log(
         command_name="transform",
         level="INFO",
@@ -122,7 +122,3 @@ def main():
         payload_path=args.payload
     )
     transform(args.payload)
-
-
-if __name__ == "__main__":
-    main()

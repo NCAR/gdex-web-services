@@ -116,7 +116,7 @@ def build_command(command_name: str, params: Dict[str, Any], file_path: str) -> 
     Parameters
     ----------
     command_name : str
-        Name of the CLI command
+        Name of the gdexws subcommand (e.g. "add-global-meta")
     params : dict
         Dictionary of parameters (excluding "command" key)
     file_path : str
@@ -127,7 +127,7 @@ def build_command(command_name: str, params: Dict[str, Any], file_path: str) -> 
     list
         List of command and arguments ready for subprocess
     """
-    cmd = [command_name]
+    cmd = ["gdexws", command_name]
 
     # Add file argument
     cmd.extend(["-f", file_path])

@@ -23,9 +23,7 @@ dependencies = [
 ]
 
 [project.scripts]
-add-global-meta = "gdexws.tools.add_global_meta:main"
-create-exchange-dir = "gdexws.tools.create_exchange_dir:main"
-transform = "gdexws.composers.transform:main"
+gdexws = "gdexws.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/NCAR/gdex-web-services"

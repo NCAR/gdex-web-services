@@ -77,7 +77,7 @@ echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "pr
 echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "process_message": "jsonl location: $output_jsonl "}}' >> "$output_jsonl"
 
 # Execute transform (the payload can be Boreas link)
-transform -p "$PAYLOAD" >> "$output_jsonl"
+gdexws transform -p "$PAYLOAD" >> "$output_jsonl"
 EXIT_CODE=$?
 
 # Shell end message

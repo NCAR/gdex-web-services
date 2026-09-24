@@ -3,13 +3,13 @@ import os
 import re
 import pwd
 import shutil
-import argparse
 import subprocess
 import sys
 
 from gdexws.utils import service_log
 
 COMMAND_NAME = "create-exchange-dir"
+DESCRIPTION = "Create an exchange directory and grant an HPC user read/write access via ACL"
 
 # The only location under which this tool will ever create a directory.
 EXCHANGE_DIR = "/glade/campaign/collections/gdex/data/exchange"
@@ -247,21 +247,16 @@ def create_exchange_dir(username, dirname, exchange_dir=EXCHANGE_DIR, debug=Fals
     return target
 
 
-def main():
-    """CLI entry point."""
-    parser = argparse.ArgumentParser(
-        description=f"Create a directory under {EXCHANGE_DIR} and grant a user read/write access via ACL"
-    )
+def add_arguments(parser):
+    """Declare CLI arguments on the `create-exchange-dir` subparser."""
     parser.add_argument("username", help="HPC username to grant read/write access")
     parser.add_argument("dirname", help="Name of the directory to create (a single path component)")
-    parser.add_argument("-d", "--debug", action="store_true", help="Enable debug mode")
-    args = parser.parse_args()
 
+
+def run(args):
+    """Execute the tool with parsed arguments."""
     try:
         create_exchange_dir(args.username, args.dirname, debug=args.debug)
     except ExchangeDirError as exc:
         service_log(COMMAND_NAME, "ERROR", str(exc), username=args.username, dirname=args.dirname)
         sys.exit(1)
-
-if __name__ == "__main__":
-    main()
