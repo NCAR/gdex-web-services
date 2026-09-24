@@ -38,7 +38,7 @@ flowchart TD
     subgraph HPC["NCAR HPC — PBS / Casper"]
         C["curl downloads<br/>transform.{request_id}.pbs"] --> S["qsub submits the job"]
         S --> J["PBS job starts:<br/>activates the gdexws<br/>Python venv"]
-        J --> T["transform -p PAYLOAD_URL<br/>gdexws/composers/transform.py"]
+        J --> T["gdexws transform -p PAYLOAD_URL<br/>gdexws/composers/transform.py"]
         T -->|"direct HTTPS read"| BOREAS
         T --> LOOP["for each file, for each command<br/>(strict serial order)"]
         LOOP --> TOOL["gdexws CLI tool<br/>e.g. add-global-meta<br/>gdexws/tools/*.py"]
@@ -54,7 +54,7 @@ Walkthrough:
 2. **API server receives the request** at `POST /compose/transform` and generates a `request_id` (UUID) used to name every artifact for this job and to name its log file.
 3. **API composes the payload and PBS script**: the request is serialized to a JSON payload and a PBS script is templated around it; both are uploaded to the Boreas object store (S3-compatible), keyed by `request_id`, so the HPC side only ever needs a URL.
 4. **API talks to `dscheck`** (the GDEX job queue, via `rda_python_common`) to schedule two steps on HPC: first a `curl` to download the PBS script, then — as a background task that polls until the script actually exists on disk (avoiding a race) — a `qsub` to submit it. Everything up to this point runs on the API server; the response returned to the user carries the `cindex`/`request_id` needed to poll status.
-5. **HPC executes the job**: once `dscheck` runs the queued `qsub`, PBS starts the job, which activates the `gdexws` virtualenv already installed on HPC and runs `transform -p <payload_url>`, reading the payload directly from its Boreas URL — no shared filesystem hand-off is needed between the API server and HPC.
+5. **HPC executes the job**: once `dscheck` runs the queued `qsub`, PBS starts the job, which activates the `gdexws` virtualenv already installed on HPC and runs `gdexws transform -p <payload_url>`, reading the payload directly from its Boreas URL — no shared filesystem hand-off is needed between the API server and HPC.
 6. **`transform` runs the payload serially**: for each file, for each command (in the order given), it shells out to the corresponding `gdexws` CLI tool. Any non-zero exit aborts the job. Every step — including PBS shell start/end markers — is appended as one JSON line to `{request_id}.gdexws.jsonl` on the shared `/glade` campaign store, which `GET /compose/log/{request_id}` reads back to report job progress to the user. `GET /compose/status/{cindex}` reports the separate, queue-level `dscheck` record status (queued/running/etc.) and does not read this file.
 
 ## 2. API server (`app/`)
@@ -107,7 +107,7 @@ gdexws/
 │   └── logging.py          #   service_log / log_format — the JSONL structured-log format
 ├── pbs/
 │   └── transform.pbs       # reference PBS script template (superseded per-job by utils/pbs.py's generated version)
-└── pyproject.toml          # registers CLI entry points: `transform`, `add-global-meta`, ...
+└── pyproject.toml          # registers the single `gdexws` CLI entry point
 ```
 
 **Separation of concerns:**
@@ -118,7 +118,7 @@ gdexws/
 | `tools/` | One curation operation per module (e.g. `add_global_meta.py`), each with its own `argparse` CLI and its own entry point in `pyproject.toml`. Adding a new curation capability means adding a new file here, not touching the composer. | `utils/` |
 | `utils/` | Shared, low-level helpers with no orchestration or curation logic of their own: payload loading (`parse_payload.py`), path safety (`file_validation.py`), and the structured JSONL log format (`logging.py`) every command/composer writes through. | — |
 
-`composers/transform.py` never imports a tool module directly — it calls tools the same way a human would, as subprocesses via `build_command`/`execute_command`, using the CLI names registered in `pyproject.toml` (`project.scripts`). This keeps the composer decoupled from any given tool's Python API and means the payload's `"command": "add_global_meta"` maps 1:1 onto an installed CLI (`add-global-meta`), not a Python import path.
+`composers/transform.py` never imports a tool module directly — it calls tools the same way a human would, as subprocesses via `build_command`/`execute_command`, using `gdexws <tool>` subcommands, which `gdexws/cli.py` auto-discovers from `tools/` and `composers/`. This keeps the composer decoupled from any given tool's Python API and means the payload's `"command": "add_global_meta"` maps 1:1 onto a `gdexws` subcommand (`gdexws add-global-meta`), not a Python import path.
 
 ## 4. Cross-cutting notes
 
