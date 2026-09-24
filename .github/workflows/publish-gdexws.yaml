@@ -1,0 +1,112 @@
+# Publish the gdexws package to PyPI on every merged PR into main that changes gdexws/.
+#
+# The version is the next patch release after the latest vX.Y.Z git tag (v0.1.0 if
+# there is none). It is passed to the build via SETUPTOOLS_SCM_PRETEND_VERSION, and the
+# tag is only created and pushed AFTER the upload succeeds, so a failed publish never
+# leaves a tag behind. For a minor/major bump, push the vX.Y.0 tag by hand; later
+# merges continue from it.
+#
+# One-time setup on PyPI (no API token is stored anywhere): add a "pending publisher"
+# for project `gdexws` with owner NCAR, repository gdex-web-services, workflow
+# publish-gdexws.yaml, environment pypi. Optionally do the same on TestPyPI.
+name: Publish gdexws to PyPI
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+    paths:
+      - "gdexws/**"
+  workflow_dispatch:
+
+# Serialize runs so two quick merges cannot compute the same next version.
+concurrency:
+  group: publish-gdexws
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event.pull_request.merged == true || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.version.outputs.sha }}
+    steps:
+      - name: Checkout the merged commit with full history and tags
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: version
+        run: |
+          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          if [ -z "$latest" ]; then
+            next="0.1.0"
+          else
+            IFS=. read -r major minor patch <<< "${latest#v}"
+            next="${major}.${minor}.$((patch + 1))"
+          fi
+          echo "Latest tag: ${latest:-none}; next version: ${next}"
+          echo "version=${next}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run gdexws tests
+        run: |
+          pip install ./gdexws pytest
+          pytest tests/test_create_exchange_dir.py -v
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Build sdist and wheel
+        run: |
+          pip install build twine
+          python -m build --outdir dist gdexws
+          twine check dist/*
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: gdexws-dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # PyPI Trusted Publishing (OIDC)
+      contents: write   # push the release tag after a successful upload
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: gdexws-dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Checkout to tag the released commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.sha }}
+
+      - name: Tag the release
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ needs.build.outputs.version }}" -m "gdexws ${{ needs.build.outputs.version }}"
+          git push origin "v${{ needs.build.outputs.version }}"
