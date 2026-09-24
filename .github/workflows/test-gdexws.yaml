@@ -1,0 +1,36 @@
+# Run the gdexws tests on every PR into main that touches the package or its tests, so a
+# break is caught before merge (publish-gdexws.yaml only runs them after the merge).
+name: Test gdexws
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "gdexws/**"
+      - "tests/test_create_exchange_dir.py"
+      - ".github/workflows/test-gdexws.yaml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install gdexws and pytest
+        run: pip install ./gdexws pytest
+        env:
+          # The version does not matter for tests; this avoids needing git tags in a shallow clone.
+          SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
+
+      - name: Run gdexws tests
+        run: pytest tests/test_create_exchange_dir.py -v

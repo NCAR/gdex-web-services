@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+from gdexws import cli
 from gdexws.tools import create_exchange_dir as ced
 from gdexws.tools.create_exchange_dir import ExchangeDirError, create_exchange_dir
 
@@ -127,7 +128,7 @@ class TestCreate:
 
 class TestMain:
     def test_error_exits_nonzero(self, exchange):
-        with patch("sys.argv", ["create-exchange-dir", USER, ".."]):
+        with patch("sys.argv", ["gdexws", "create-exchange-dir", USER, ".."]):
             with pytest.raises(SystemExit) as exc:
-                ced.main()
+                cli.main()
         assert exc.value.code == 1
