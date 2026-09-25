@@ -13,6 +13,10 @@
 # Runtime dependencies are pulled in from gdexws's package metadata.
 # System tools setfacl/getfacl (OS package "acl") must be on PATH.  
 #
+# Crontab setup for upgrading gdexws environment (gdexdata cron)
+# Upgrade gdexws in the HPC venv every day at 03:00
+# 0 3 * * * (date; /glade/u/home/gdexdata/gdexwsenv/bin/python -m pip install --upgrade --disable-pip-version-check "gdexws>=0.1.1") >> /glade/u/home/gdexdata/gdexwsenv-upgrade.log 2>&1
+#
 # Setting the env permission (not applied)
 # V=/glade/u/home/gdexdata/gdexwsenv
 #
