@@ -1,0 +1,30 @@
+# Environment for running gdexws on the HPC.
+# - /glade/u/home/gdexdata/gdexwsenv
+#
+# Currently, python is based on the conda env ncarenv/25.10
+# python version: 3.11 
+# using /glade/u/apps/casper/25.10/opt/view/bin/python3
+#
+#   python3 -m venv /glade/u/home/gdexdata/gdexwsenv
+#   source /glade/u/home/gdexdata/gdexwsenv/bin/activate        (bash/zsh)
+#   source /glade/u/home/gdexdata/gdexwsenv/bin/activate.csh    (csh/tcsh)
+#   pip install "gdexws>=0.1.1"
+#
+# Runtime dependencies are pulled in from gdexws's package metadata.
+# System tools setfacl/getfacl (OS package "acl") must be on PATH.  
+#
+# Setting the env permission (not applied)
+# V=/glade/u/home/gdexdata/gdexwsenv
+#
+# # 1. Let the group write to everything that exists now
+# chgrp -R decs $V
+# chmod -R g+rwX $V
+#
+# # 2. Make new subdirectories inherit the decs group
+# find $V -type d -exec chmod g+s {} +
+#
+# # 3. Default ACLs: files that pip creates later are group-writable too,
+# #    whatever umask the person running pip has
+# find $V -type d -exec setfacl -m d:g::rwx,d:m::rwx {} +
+
+gdexws>=0.1.1
