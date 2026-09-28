@@ -19,7 +19,7 @@ on:
       - main
     paths:
       - "gdexws/**"
-      - "!gdexws/requirements.txt"
+      - "!gdexws/requirements_hpc.txt"
   workflow_dispatch:
 
 # Serialize runs so two quick merges cannot compute the same next version.
