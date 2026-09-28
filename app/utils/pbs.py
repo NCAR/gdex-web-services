@@ -15,7 +15,7 @@ def _generate_pbs_script(
     mem_gb: int = 1,
     walltime: str = "00:05:00",
     queue: str = "gdex",
-    env_activation: str = "source /glade/u/home/chiaweih/gdex-web-services/test-gdexws-env/bin/activate"
+    env_activation: str = "source /glade/u/home/gdexdata/gdexwsenv/bin/activate"
 ) -> str:
     """Generate a PBS job script for transform processing.
 
@@ -36,7 +36,7 @@ def _generate_pbs_script(
     queue : str, optional
         PBS queue name. Default: "gdex"
     env_activation : str, optional
-        Environment activation command. Default: source conda environment
+        Environment activation command. Default: gdexdata gdexwsenv
 
     Returns
     -------

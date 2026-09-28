@@ -4,17 +4,33 @@ Service tools for data processing and management.
 
 ## Installation
 
-Install the package in development mode:
+### Release version (PyPI)
+
+Install the latest published release:
 
 ```bash
-pip install -e .
+pip install gdexws
 ```
 
-Or install normally:
+Upgrade an existing install to the newest release:
 
 ```bash
-pip install .
+pip install --upgrade gdexws
 ```
+
+Runtime dependencies (`netCDF4`, `httpx`) are installed automatically.
+
+### Developer version (GitHub)
+
+Clone the repository and install `gdexws` in editable mode, so changes to the source take effect without reinstalling:
+
+```bash
+git clone https://github.com/NCAR/gdex-web-services.git
+cd gdex-web-services
+pip install -e ./gdexws
+```
+
+The version is derived from the repository's git tags, so install from a git clone (not a copied folder) to get a meaningful version number.
 
 ## CLI Commands
 
@@ -42,8 +58,9 @@ The directory name must be a single path component (`[A-Za-z0-9._-]`, starting w
 
 ## Development
 
-To install with development dependencies:
+From the repository root, with the developer version installed:
 
 ```bash
-pip install -e ".[dev]"
+pip install pytest
+pytest tests/test_create_exchange_dir.py -v
 ```
