@@ -19,14 +19,14 @@ def _post_to_callback_url(url, payload):
 
 
 @celery_app.task
-def notify_callback_success(result, callback_url):
-  _post_to_callback_url(callback_url, {"status": "SUCCESS", "result": result})
+def notify_callback_success(result, callback_url, task_id):
+  _post_to_callback_url(callback_url, {"task_id": task_id, "status": "SUCCESS", "result": result})
 
 
 @celery_app.task
-def notify_callback_failure(request_id, callback_url):
+def notify_callback_failure(request_id, callback_url, task_id):
   failed_result = AsyncResult(request_id, app=celery_app)
-  _post_to_callback_url(callback_url, {"status": "FAILURE", "error": str(failed_result.result)})
+  _post_to_callback_url(callback_url, {"task_id": task_id, "status": "FAILURE", "error": str(failed_result.result)})
 
 
 #####################################

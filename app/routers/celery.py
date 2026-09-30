@@ -2,21 +2,21 @@ from fastapi import APIRouter
 from app.celery_app import celery_app
 from app.tasks import test_task, notify_callback_success, notify_callback_failure
 from celery.result import AsyncResult
+from celery.utils import uuid as celery_uuid
 
 router = APIRouter(prefix="/celery", tags=["celery"])
 
 
 @router.get("/test-celery")
 def test_celery(callback_url: str | None = None):
-    kwargs = {}
+    task_id = celery_uuid()
+    kwargs = {"task_id": task_id}
 
     if callback_url:
-        kwargs["link"] = notify_callback_success.s(callback_url)
-        kwargs["link_error"] = notify_callback_failure.s(callback_url)
-
+        kwargs["link"] = notify_callback_success.s(callback_url, task_id)
+        kwargs["link_error"] = notify_callback_failure.s(callback_url, task_id)
 
     task = test_task.apply_async(**kwargs)
-
 
     return {
         "task_id": task.id,
