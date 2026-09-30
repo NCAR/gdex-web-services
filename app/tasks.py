@@ -1,10 +1,47 @@
 from app.celery_app import celery_app
+from celery.result import AsyncResult
 from pathlib import Path
+import requests
+
+
+#####################################
+######## Shared Tasks ###############
+#####################################
+
+
+def _post_to_callback_url(url, payload):
+  response = requests.post(url, json=payload)
+  if response.ok:
+      print("Success")
+      print(response.json())
+  else:
+      print(f"Failed with status code: {response.status_code}")
+
+
+@celery_app.task
+def notify_callback_success(result, callback_url):
+  _post_to_callback_url(callback_url, {"status": "SUCCESS", "result": result})
+
+
+@celery_app.task
+def notify_callback_failure(request_id, callback_url):
+  failed_result = AsyncResult(request_id, app=celery_app)
+  _post_to_callback_url(callback_url, {"status": "FAILURE", "error": str(failed_result.result)})
+
+
+#####################################
+######## /celery Tasks ##############
+#####################################
 
 @celery_app.task
 def test_task():
   print("Hello from Celery!")
   return "Yo, Celery is working!"
+
+#####################################
+######## /router/files Tasks ########
+#####################################
+
 
 @celery_app.task
 def check_recursive_task(path):
