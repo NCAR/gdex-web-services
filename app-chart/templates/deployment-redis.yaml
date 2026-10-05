@@ -38,7 +38,8 @@ spec:
     spec:
       containers:
       - name: {{ $redisName }}
-        image: {{ .Values.redis.image }}
+        image: {{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}
+        imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
         # --port keeps the server in sync with redis.port (Service/containerPort);
         # appendonly so scheduled task retries/countdowns survive a restart
         command: ["redis-server", "--port", "{{ .Values.redis.port }}"

@@ -42,7 +42,7 @@ redis:
   # true  = deploy a Redis Deployment/Service/PVC from this chart (own test instance)
   # false = use an existing external Redis at `host` (e.g. one managed by its own Helm release)
   deploy: true
-  name: redis             # used when deploy: true (Service name, prefixed with testName if set)
+  name: gdex-redis        # used when deploy: true (Service name, prefixed with testName if set)
   host: redis             # used when deploy: false — Service DNS name of the external Redis
   port: 6379
   brokerDb: 0
@@ -52,7 +52,10 @@ redis:
     existingSecret: ""
     passwordKey: redis-password
   # The settings below only apply when deploy: true
-  image: redis:7-alpine
+  image:
+    repository: redis      # official image from Docker Hub (docker.io/library/redis)
+    tag: "8.10.2-trixie"
+    pullPolicy: IfNotPresent
   persistence:
     enabled: true         # appendonly yes + PVC, so scheduled retries survive a restart
     size: 2Gi
