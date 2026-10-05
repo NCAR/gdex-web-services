@@ -10,3 +10,4 @@ boto3==1.43.47
 rda_python_common[psycopg2-binary]==3.0.18
 
 
+celery[redis]==5.5.3
