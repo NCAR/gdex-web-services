@@ -53,7 +53,7 @@ redis:
     passwordKey: redis-password
   # The settings below only apply when deploy: true
   image:
-    repository: redis      # official image from Docker Hub (docker.io/library/redis)
+    repository: docker.io/library/redis      # fully-qualified: cluster enforces short-name mode
     tag: "8.10.2-trixie"
     pullPolicy: IfNotPresent
   persistence:
