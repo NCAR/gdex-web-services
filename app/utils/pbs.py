@@ -73,8 +73,8 @@ output_jsonl="$jsonl_dir/$REQUEST_ID.gdexws.jsonl"
 # Shell start message
 time_iso=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "process_message": "PBS job started"}}' >> "$output_jsonl"
-echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "process_message": "This is the jsonl with REQUEST_ID:$REQUEST_ID "}}' >> "$output_jsonl"
-echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "process_message": "jsonl location: $output_jsonl "}}' >> "$output_jsonl"
+echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "process_message": "This is the jsonl with REQUEST_ID:'$REQUEST_ID'"}}' >> "$output_jsonl"
+echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "process_message": "jsonl location: '$output_jsonl'"}}' >> "$output_jsonl"
 
 # Execute transform (the payload can be Boreas link)
 gdexws transform -p "$PAYLOAD" >> "$output_jsonl"
