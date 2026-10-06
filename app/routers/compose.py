@@ -99,7 +99,7 @@ def get_celery_status(request_id: str) -> Dict[str, Any]:
     dict
         - request_id: Request identifier
         - state: PENDING (log not written yet, or unknown request_id),
-          PROGRESS, PBS_FAILURE_REPORTED (the job logged an ERROR line),
+          PBS_PROGRESS, PBS_FAILURE_REPORTED (the job logged an ERROR line),
           SUCCESS (job finished; see info.job_status = completed|failed),
           or FAILURE (the status watcher itself broke)
         - info: The latest JSONL log entry (gdexws log_format dict), the

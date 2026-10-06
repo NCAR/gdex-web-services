@@ -73,7 +73,7 @@ def main():
         service_log(
             command_name=args.tool,
             level="ERROR",
-            process_message="Unhandled exception",
+            process_message=f"Unhandled exception for tool '{args.tool}'",
             traceback=traceback.format_exc()
         )
         sys.exit(1)

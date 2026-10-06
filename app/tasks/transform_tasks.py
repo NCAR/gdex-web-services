@@ -143,6 +143,8 @@ def jsonl_to_celery_state(entry: Dict[str, Any]) -> str:
     """Turn JSONL line (gdexws log_format dict) into a Celery state."""
     if entry.get("level") == "ERROR":
         # "the job reported an error" — not a Celery-level failure but PBS level failure
+        # and not the final completion of the job that show "PBS job failed"
+        # this is catching the ERROR line produced by the service_log in gdexws cli
         return STATE_PBS_FAILURE_REPORTED
     return STATE_PBS_PROGRESS
 
@@ -197,6 +199,15 @@ def watch_job(self, request_id: str, callback_url: Optional[str] = None, last_li
         watch_job.apply_async(args=[request_id, callback_url], task_id=request_id)
     The PBS script and gdexws CLI never need to know this task, or a
     callback, exists.
+
+    TODO: decide how to handle the cases where this loop does not end cleanly:
+      - Never ends: no timeout / max-poll cap. If the PBS job never starts (dscheck
+        qsub row not picked up) or dies (walltime, qdel, node failure) before writing
+        a terminal line, the watcher reschedules forever and the state is stuck at
+        PENDING / PBS_PROGRESS / PBS_FAILURE_REPORTED.
+      - Crashes: an unhandled exception (bad JSON line, I/O error, bug) marks the task
+        FAILURE and stops polling, and notify_callback is never fired, so the portal
+        is never told.
     """
     log_path = Path(WORKDIR) / f"{request_id}.gdexws.jsonl"
 
@@ -215,6 +226,7 @@ def watch_job(self, request_id: str, callback_url: Optional[str] = None, last_li
     if not new_entries:
         _reschedule_watch(self, request_id, callback_url, last_line, READ_JSONL_INT)
 
+    # identify terminal lines (PBS_COMPLETED or PBS_FAILED) for PBS job completion state
     for entry in new_entries:
         msg = entry.get("process_message")
         if msg in (PBS_COMPLETED, PBS_FAILED):
@@ -224,11 +236,14 @@ def watch_job(self, request_id: str, callback_url: Optional[str] = None, last_li
             else:
                 job_status = "failed"
 
+            # the result "job_status" is the PBS job status not the task status
+            # which is what we report back to the callback and ultimately to the client
             result = {"request_id": request_id, "job_status": job_status}
             result.update(entry)  # add the JSONL line itself (command, time_of_process, level, ...)
 
             if callback_url:  # only if one was provided in the payload
                 notify_callback.delay(result, callback_url)
+            # after notifying the callback, we can stop watching as the job has reached a terminal state
             return result
 
     # only update the state with the latest entry if there are new entries

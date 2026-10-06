@@ -166,7 +166,7 @@ def execute_command(cmd: List[str]) -> int:
         Return code from subprocess
     """
     service_log(
-        command_name="execute-command",
+        command_name="parse-payload",
         level="INFO",
         process_message="Executing command",
         cli_command=" ".join(cmd)
@@ -178,7 +178,7 @@ def execute_command(cmd: List[str]) -> int:
     result = subprocess.run(cmd, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:
         service_log(
-            command_name="execute-command",
+            command_name="parse-payload",
             level="ERROR",
             process_message="Command failed",
             cli_command=" ".join(cmd),

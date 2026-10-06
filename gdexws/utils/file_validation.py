@@ -43,5 +43,5 @@ def relpath_validate(
             full_path.relative_to(base_path)
             full_paths.append(str(full_path))
         except ValueError:
-            return service_log("relpath-validate", "ERROR", f"Access denied: '{file_path}' escapes base directory")
+            return service_log("file-validation", "ERROR", f"Access denied: '{file_path}' escapes base directory")
     return full_paths
