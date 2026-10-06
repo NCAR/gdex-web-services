@@ -8,6 +8,10 @@ Modules may also define `DESCRIPTION`, shown in `gdexws --help`.
 import argparse
 import importlib
 import pkgutil
+import sys
+import traceback
+
+from gdexws.utils import service_log
 
 TOOL_PACKAGES = ["gdexws.tools", "gdexws.composers"]
 
@@ -59,7 +63,20 @@ def build_parser():
 def main():
     # Parse sys.argv with the matching subparser, then call the chosen tool's run(args).
     args = build_parser().parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except SystemExit:
+        raise
+    except Exception:
+        # Log the full traceback (stdout, so it lands in the PBS job's .jsonl)
+        # instead of letting it go to stderr, where nothing reads it.
+        service_log(
+            command_name=args.tool,
+            level="ERROR",
+            process_message="Unhandled exception",
+            traceback=traceback.format_exc()
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
