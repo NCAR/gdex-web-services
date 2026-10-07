@@ -15,7 +15,7 @@ def _generate_pbs_script(
     mem_gb: int = 1,
     walltime: str = "00:05:00",
     queue: str = "gdex",
-    env_activation: str = "source /glade/u/home/chiaweih/gdex-web-services/test-gdexws-env/bin/activate"
+    env_activation: str = "source /glade/u/home/gdexdata/gdexwsenv/bin/activate"
 ) -> str:
     """Generate a PBS job script for transform processing.
 
@@ -36,7 +36,7 @@ def _generate_pbs_script(
     queue : str, optional
         PBS queue name. Default: "gdex"
     env_activation : str, optional
-        Environment activation command. Default: source conda environment
+        Environment activation command. Default: gdexdata gdexwsenv
 
     Returns
     -------
@@ -73,11 +73,11 @@ output_jsonl="$jsonl_dir/$REQUEST_ID.gdexws.jsonl"
 # Shell start message
 time_iso=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "process_message": "PBS job started"}}' >> "$output_jsonl"
-echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "process_message": "This is the jsonl with REQUEST_ID:$REQUEST_ID "}}' >> "$output_jsonl"
-echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "process_message": "jsonl location: $output_jsonl "}}' >> "$output_jsonl"
+echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "process_message": "This is the jsonl with REQUEST_ID:'$REQUEST_ID'"}}' >> "$output_jsonl"
+echo '{{"command": "pbs", "time_of_process": "'$time_iso'", "level": "INFO", "process_message": "jsonl location: '$output_jsonl'"}}' >> "$output_jsonl"
 
 # Execute transform (the payload can be Boreas link)
-transform -p "$PAYLOAD" >> "$output_jsonl"
+gdexws transform -p "$PAYLOAD" >> "$output_jsonl"
 EXIT_CODE=$?
 
 # Shell end message
