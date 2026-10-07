@@ -1,5 +1,9 @@
 replicaCount: 1
 
+# Prefixes every resource name (chiaweih-gdex-redis, ...) so this release can
+# share the namespace with prod. Keep it here, not only on the helm command line.
+testName: chiaweih
+
 webapp:
   name: gdex-webservices
   group: gdex-web-services
@@ -42,15 +46,15 @@ redis:
   # true  = deploy a Redis Deployment/Service/PVC from this chart (own test instance)
   # false = use an existing external Redis at `host` (e.g. one managed by its own Helm release)
   deploy: true
-  name: gdex-redis        # used when deploy: true (Service name, prefixed with testName if set)
-  host: redis             # used when deploy: false — Service DNS name of the external Redis
+  name: gdex-redis        # used when deploy: true (Service name, prefixed with testName if set) (setup by this chart)
+  host: redis             # used when deploy: false — Service DNS name of the external Redis (setup by gdex-redis repo)
   port: 6379
   brokerDb: 0
   resultDb: 1
   # Optional password auth for an external Redis: existing Secret + key holding the password.
   auth:
-    existingSecret: ""
-    passwordKey: redis-password
+    existingSecret: gdex-redis-auth  # reference existing secret named gdex-redis-auth. Use empty string if want noAuth
+    passwordKey: redis-password      # key within the existing secret holding the Redis password
   # The settings below only apply when deploy: true
   image:
     repository: docker.io/library/redis      # fully-qualified: cluster enforces short-name mode

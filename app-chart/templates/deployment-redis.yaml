@@ -41,11 +41,23 @@ spec:
         image: {{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}
         imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
         # --port keeps the server in sync with redis.port (Service/containerPort);
-        # appendonly so scheduled task retries/countdowns survive a restart
+        # appendonly so scheduled task retries/countdowns survive a restart;
+        # requirepass (from the redis.auth secret) so only clients holding the
+        # password can enqueue tasks or read results
         command: ["redis-server", "--port", "{{ .Values.redis.port }}"
-                  {{- if .Values.redis.persistence.enabled }}, "--appendonly", "yes"{{ end }}]
+                  {{- if .Values.redis.persistence.enabled }}, "--appendonly", "yes"{{ end }}
+                  {{- if .Values.redis.auth.existingSecret }}, "--requirepass", "$(REDIS_PASSWORD)"{{ end }}]
         ports:
         - containerPort: {{ .Values.redis.port }}
+        {{- if .Values.redis.auth.existingSecret }}
+        env:
+        # Same Secret/key the API and worker read for their Celery URLs
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.redis.auth.existingSecret }}
+              key: {{ .Values.redis.auth.passwordKey }}
+        {{- end }}
         resources:
           requests:
             memory: {{ .Values.redis.resources.requests.memory }}

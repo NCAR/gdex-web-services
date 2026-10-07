@@ -49,7 +49,7 @@ redis:
   resultDb: 1
   # Optional password auth for an external Redis: existing Secret + key holding the password.
   auth:
-    existingSecret: ""
+    existingSecret: gdex-redis-auth  # reference existing secret named gdex-redis-auth. Use empty string if want noAuth
     passwordKey: redis-password
   # The settings below only apply when deploy: true
   image:
