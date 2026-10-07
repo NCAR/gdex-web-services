@@ -15,7 +15,7 @@ celery_app = Celery(
     "gdex_web_services",
     broker=broker_url,
     backend=result_backend,
-    include=["app.tasks.transform_tasks"],
+    include=["app.tasks.transform_tasks", "app.tasks.portal_tasks"],
 )
 
 celery_app.conf.update(

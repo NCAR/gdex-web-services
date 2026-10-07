@@ -594,7 +594,7 @@ async def check_access(
 ###################### CELERY ENDPOINTS ######################
 ##############################################################
 from celery import chain
-from app.tasks import check_recursive_task, compute_size_task
+from app.tasks.portal_tasks import check_recursive_task, compute_size_task
 
 
 @router.get("/get-data-size")

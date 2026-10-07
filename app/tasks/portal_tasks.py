@@ -1,3 +1,4 @@
+"""Celery tasks that run directly in the worker pod (no PBS submission)."""
 from app.celery_app import celery_app
 from celery.result import AsyncResult
 from pathlib import Path

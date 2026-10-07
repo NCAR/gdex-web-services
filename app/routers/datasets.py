@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.tasks import test_task
+from app.tasks.portal_tasks import test_task
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from app.celery_app import celery_app
-from app.tasks import test_task, notify_callback_success, notify_callback_failure
+from app.tasks.portal_tasks import test_task, notify_callback_success, notify_callback_failure
 from celery.result import AsyncResult
 from celery.utils import uuid as celery_uuid
 
