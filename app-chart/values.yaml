@@ -41,7 +41,7 @@ webapp:
 redis:
   # true  = deploy a Redis Deployment/Service/PVC from this chart (own test instance)
   # false = use an existing external Redis at `host` (e.g. one managed by its own Helm release)
-  deploy: true
+  deploy: false
   name: gdex-redis        # used when deploy: true (Service name, prefixed with testName if set)
   host: redis             # used when deploy: false — Service DNS name of the external Redis
   port: 6379
@@ -49,7 +49,7 @@ redis:
   resultDb: 1
   # Optional password auth for an external Redis: existing Secret + key holding the password.
   auth:
-    existingSecret: gdex-redis-auth  # reference existing secret named gdex-redis-auth. Use empty string if want noAuth
+    existingSecret: ""  # reference existing secret named gdex-redis-auth. Use empty string if want noAuth
     passwordKey: redis-password
   # The settings below only apply when deploy: true
   image:
