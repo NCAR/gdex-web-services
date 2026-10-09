@@ -2,7 +2,7 @@
 
 from app.utils.boreas import _OBJECT_STORE_ENDPOINT, s3_client
 
-_BUCKET = "gdex-data"
+_BUCKET = "gdex-services"
 _PBS_PREFIX = "services_tmp/pbs"
 
 

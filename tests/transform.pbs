@@ -22,7 +22,7 @@ source /glade/u/home/chiaweih/gdex-web-services/test-gdexws-env/bin/activate
 
 
 ### Parse positional arguments
-PAYLOAD="https://boreas.hpc.ucar.edu:6443/gdex-data/services_tmp/payloads/transform.payload.json"
+PAYLOAD="https://boreas.hpc.ucar.edu:6443/gdex-services/services_tmp/payloads/transform.payload.json"
 
 ### SETUP .jsonl
 jsonl_dir="/glade/campaign/collections/gdex/data/exchange/Web-services/"
