@@ -223,12 +223,12 @@ async def post_transform(
     # Create and upload payload to Boreas with request_id in filename
     # Format: services_tmp/payloads/transform.payload.{request_id}.json
     payload_url = create_transform_payload(request, request_id=request_id)
-    # payload_url = f'https://boreas.hpc.ucar.edu/gdex-data/services_tmp/payloads/transform.payload.{request_id}.json'
+    # payload_url = f'https://boreas.hpc.ucar.edu/gdex-services/services_tmp/payloads/transform.payload.{request_id}.json'
 
     # Create and upload PBS script to Boreas with request_id in filename
     # Format: services_tmp/pbs/transform.{request_id}.pbs
     pbs_url = create_pbs_script(payload_url, request_id=request_id)
-    # pbs_url = f'https://boreas.hpc.ucar.edu/gdex-data/services_tmp/pbs/transform.{request_id}.pbs'
+    # pbs_url = f'https://boreas.hpc.ucar.edu/gdex-services/services_tmp/pbs/transform.{request_id}.pbs'
 
     logger.info(f"Payload URL: {payload_url}")
     logger.info(f"PBS URL: {pbs_url}")
