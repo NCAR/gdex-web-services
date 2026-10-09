@@ -62,5 +62,5 @@ From the repository root, with the developer version installed:
 
 ```bash
 pip install pytest
-pytest tests/test_create_exchange_dir.py -v
+pytest tests/gdexws_tests -v
 ```

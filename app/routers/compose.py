@@ -7,16 +7,16 @@ This module defines endpoints for compose action (i.e. transform ... etc), and i
 from typing import Dict, Any
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query
+from celery.result import AsyncResult
 import uuid
-import time
-import asyncio
 import json
 import logging
-import shutil
 
 from app.schemas.models import TransformRequest
-from app.utils import get_dscheck_json, create_transform_payload, create_pbs_script
+from app.celery_app import celery_app
+from app.tasks.transform_tasks import celery_transform
+from app.utils import get_dscheck_json
 
 # Import RDA/GDEX libraries (rda-python-common) for database interaction and logging.
 try:
@@ -32,40 +32,21 @@ except ImportError as e:
 
 router = APIRouter(prefix="/compose", tags=["compose"])
 
+logger = logging.getLogger(__name__)
+
 # set up global constants
 WORKDIR = str(Path('/glade/campaign/collections/gdex/data/exchange/Web-services/'))
-LOGS_DIR = Path("/app/logs")
-LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def setup_request_logger(request_id: str):
-    """Create logger for this request"""
-    log_file = LOGS_DIR / f"{request_id}.log"
-
-    logger = logging.getLogger(f"request.{request_id}")
-    logger.handlers.clear()  # Clear any existing handlers
-
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-
-    # File handler - write to disk
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    # Console handler - also output to docker logs
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
-    logger.setLevel(logging.DEBUG)
-
-    return logger, log_file
-
-
-@router.get("/status/{cindex}")
+# `{cindex:int}` only matches all-digit paths, so a UUID falls through to
+# GET /status/{request_id} below instead of failing int validation here.
+@router.get("/status/{cindex:int}")
 async def get_status(cindex: int) -> Dict[str, Any]:
     """
     Retrieve dscheck status and latest processing output for a specific cindex.
+
+    Queue-level debugging tool. Clients should poll
+    GET /compose/status/{request_id} instead.
 
     Queries the dscheck database record for the given cindex. Returns
     standardized JSON with the record's current status. For the job's own
@@ -99,6 +80,44 @@ async def get_status(cindex: int) -> Dict[str, Any]:
     return get_dscheck_json(cindex)
 
 
+@router.get("/status/{request_id}")
+def get_celery_status(request_id: str) -> Dict[str, Any]:
+    """
+    Retrieve Redis-backed job status for a transformation job.
+
+    Cheap enough to poll every few seconds. For the full step-by-step history,
+    use GET /compose/log/{request_id}; for raw dscheck-row inspection, use
+    GET /compose/status/{cindex}.
+
+    Parameters
+    ----------
+    request_id : str
+        The unique request identifier (UUID) returned by POST /compose/transform.
+
+    Returns
+    -------
+    dict
+        - request_id: Request identifier
+        - state: PENDING (log not written yet, or unknown request_id),
+          PBS_PROGRESS, PBS_FAILURE_REPORTED (the job logged an ERROR line),
+          SUCCESS (job finished; see info.job_status = completed|failed),
+          or FAILURE (the status watcher itself broke)
+        - info: The latest JSONL log entry (gdexws log_format dict), the
+          final result on SUCCESS, or an error string on FAILURE
+
+    Examples
+    --------
+    >>> curl -X GET https://api_url/compose/status/550e8400-e29b-41d4-a716-446655440000
+    """
+    result = AsyncResult(request_id, app=celery_app)
+    info = result.info
+    return {
+        "request_id": request_id,
+        "state": result.state,
+        "info": info if isinstance(info, dict) or info is None else str(info),
+    }
+
+
 @router.get("/log/{request_id}")
 async def get_log(request_id: str, issuer: str = Query(None)) -> Dict[str, Any]:
     """
@@ -106,9 +125,9 @@ async def get_log(request_id: str, issuer: str = Query(None)) -> Dict[str, Any]:
 
     Checks if the JSONL log file exists for the given request_id. Returns three possible
     responses:
-    1. Log exists: returns dscheck record with parsed log entries
-    2. No log file yet: returns status message
-    3. No log found: returns error indicating no record found
+    1. Log exists: returns jsonl content as a list of JSON objects
+    2. Log exists but parsed failed: returns error indicating invalid JSON
+    3. No log found: returns no record found
 
     Parameters
     ----------
@@ -120,7 +139,7 @@ async def get_log(request_id: str, issuer: str = Query(None)) -> Dict[str, Any]:
     Returns
     -------
     dict
-        Standardized dscheck JSON response with status and parsed log entries.
+        Standardized JSON response with request ID and parsed log entries and status message.
 
     Examples
     --------
@@ -157,23 +176,25 @@ async def get_log(request_id: str, issuer: str = Query(None)) -> Dict[str, Any]:
                 "status_message": f"Error reading log: {str(e)}"
             }
 
-    # Case 2: Log not ready yet
+    # Case 2: Log not found
     return {
         "request_id": request_id,
-        "status_message": "Processing in progress, log not yet available"
+        "status_message": "Request log not available"
     }
 
 
 
 @router.post("/transform")
-async def post_transform(
+def post_transform(
     request: TransformRequest,
-    background_tasks: BackgroundTasks,
     issuer: str = Query(None),
     specialist: str = Query("chiaweih")
 ) -> Dict[str, Any]:
     """
     Submit transformation job for dscheck processing.
+
+    Validates the request and enqueues it on the Celery worker; the Boreas
+    uploads and dscheck inserts happen off the request thread.
 
     Parameters
     ----------
@@ -187,6 +208,9 @@ async def post_transform(
                 List of transformation commands. Each command must have:
                 - command: str - the operation type
                 - Additional key-value pairs for command-specific parameters
+            callback_url : str, optional
+                ("CallbackUrl" in JSON) URL to POST the final result to
+                when the PBS job finishes.
     issuer : str, optional
         Email or identifier of the person who initiated the request.
     specialist : str, optional
@@ -195,7 +219,11 @@ async def post_transform(
     Returns
     -------
     dict
-        Standardized dscheck JSON response.
+        - request_id: Request identifier (UUID)
+        - issuer: Issuer identifier (if provided)
+        - status_message: Human-readable status message
+        - status_url: GET endpoint to poll for job state
+        - log_url: GET endpoint for the full job log
 
     Examples
     --------
@@ -209,144 +237,34 @@ async def post_transform(
     ...         "global-attr-name": "gdex_dsid",
     ...         "global-attr-value": "d99ext9",
     ...         "debug": true
-    ...       }
-    ...     ]
+    ...       },
+    ...     ],
+    ...     "CallbackUrl": "https://example.com/callback"
     ...   }'
     
     """
-    # Generate unique request ID
     request_id = str(uuid.uuid4())
-    logger, log_file = setup_request_logger(request_id)
+    try:
+        # Queue the transform job with Celery
+        # maintain the PascalCase format on key name to match the expected JSON structure that pass to the celery worker
+        celery_transform(request.model_dump(by_alias=True), request_id, specialist)
+        # Only place request_id is tied to who submitted it (not in the access log)
+        logger.info(
+            f"Transform queued request_id={request_id} issuer={issuer} specialist={specialist} "
+            f"files={len(request.files)} callback={'yes' if request.callback_url else 'no'}"
+        )
+    except Exception as e:
+        # Broker (Redis) unreachable — nothing was enqueued
+        logger.exception(f"Failed to queue transform request_id={request_id}")
+        raise HTTPException(status_code=503, detail=f"Failed to queue transform job: {e}") from e
 
-    logger.info(f"POST /transform request received - issuer: {issuer}, specialist: {specialist}")
-
-    # Create and upload payload to Boreas with request_id in filename
-    # Format: services_tmp/payloads/transform.payload.{request_id}.json
-    payload_url = create_transform_payload(request, request_id=request_id)
-    # payload_url = f'https://boreas.hpc.ucar.edu/gdex-services/services_tmp/payloads/transform.payload.{request_id}.json'
-
-    # Create and upload PBS script to Boreas with request_id in filename
-    # Format: services_tmp/pbs/transform.{request_id}.pbs
-    pbs_url = create_pbs_script(payload_url, request_id=request_id)
-    # pbs_url = f'https://boreas.hpc.ucar.edu/gdex-services/services_tmp/pbs/transform.{request_id}.pbs'
-
-    logger.info(f"Payload URL: {payload_url}")
-    logger.info(f"PBS URL: {pbs_url}")
-
-    # Prepare the dscheck record for submission for pbs script download
-    dict_dscheck_post = {
-        'command': 'curl',
-        'specialist': specialist,
-        # Download PBS script and save locally as: transform.{request_id}.pbs
-        'argv': f'-o transform.{request_id}.pbs "$DOWNLOAD_URL"',
-        'environments': f'DOWNLOAD_URL={pbs_url}',
-        'workdir': WORKDIR
+    return {
+        "request_id": request_id,
+        "issuer": issuer,
+        "status_message": "Transform job accepted and queued",
+        "status_url": f"/compose/status/{request_id}",
+        "log_url": f"/compose/log/{request_id}",
     }
-
-    try:
-        # Create PgDBI instance and add record
-        logger.info(f"Adding dscheck record for curl download command")
-        db = PgDBI()
-        cindex_download = db.pgadd("dscheck", dict_dscheck_post, PgLOG.EXITLG|PgLOG.AUTOID|PgLOG.DODFLT)
-
-        if cindex_download <= 0:
-            logger.error("Failed: dscheck returned invalid cindex")
-            log = PgLOG()
-            log.pglog("Fail to add dscheck record for '{}'".format(dict_dscheck_post['command']), logact=PgLOG.RETMSG)
-            return get_dscheck_json(cindex=0, status_message="No cindex returned for download PBS script")
-
-        logger.info(f"PBS download task created with cindex: {cindex_download}")
-
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Failed to add dscheck record: {error_msg}")
-        logger.exception(f"Exception details: {e}")
-        return get_dscheck_json(cindex=0, status_message="Failed on dscheck update info") | {"error": error_msg}
-
-    # Submit the PBS script for execution in the background after it is downloaded, to avoid race condition
-    logger.info("Submitting PBS submission task to background queue")
-    background_tasks.add_task(
-        pbs_submit,
-        specialist,
-        request_id
-    )
-
-    # do not wait for the pbs_submit to finish, return the cindex_pbs for the user to check the status
-    logger.info("Returning response to user with cindex_download")
-    return get_dscheck_json(cindex=cindex_download, request_id=request_id, status_message=f"PBS script downloading + queued for execution")
-
-async def pbs_submit(specialist: str, request_id: str, workdir: str = WORKDIR) -> Dict[str, Any]:
-    """
-    The async function to submit the PBS script for execution after it is downloaded.
-
-    Parameters
-    ----------
-    request_id : str
-        The unique request identifier used in filename.
-    specialist : str
-        The specialist assigned to process the job.
-    workdir : str
-        The working directory where the PBS script is located.
-
-    """
-    logger, log_file = setup_request_logger(request_id)
-    error_occurred = False
-
-    try:
-        logger.info(f"Starting PBS submission for request {request_id}")
-
-        # check if the pbs script is downloaded successfully
-        # retry till it becomes available, or timeout after 3 mins
-
-        # # local test
-        # timeout = 60*2
-        # await asyncio.sleep(timeout)
-
-        # k8s deployment
-        timeout = 60*3
-        start_time = time.time()
-        pbs_script_path = Path(workdir) / f"transform.{request_id}.pbs"
-        while not pbs_script_path.exists():
-            if time.time() - start_time > timeout:
-                logger.error(f"Failed on downloading PBS script at {pbs_script_path}")
-                error_occurred = True
-                raise RuntimeError(f"Failed on downloading PBS script at {pbs_script_path}")
-            await asyncio.sleep(10)
-        
-        logger.info(f"PBS script downloaded successfully at {pbs_script_path}")
-
-        # Prepare the dscheck record for submission for pbs script download
-        # REQUEST_ID is passed as env var to PBS script for JSONL filename
-        dict_dscheck_post = {
-            'command': 'qsub',
-            'specialist': specialist,
-            'argv': f'-v REQUEST_ID transform.{request_id}.pbs',
-            'environments': f'REQUEST_ID={request_id}',
-            'workdir': workdir
-        }
-        logger.debug(f"record for dscheck : dict_dscheck_post= {dict_dscheck_post}")
-        
-        try:
-            # Create PgDBI instance and add record
-            db = PgDBI()
-            cindex_submit = db.pgadd("dscheck", dict_dscheck_post, PgLOG.EXITLG|PgLOG.AUTOID|PgLOG.DODFLT)
-            logger.info(f"PBS script submitted successfully with cindex: {cindex_submit}")
-
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Failed to submit PBS script: {error_msg}")
-            error_occurred = True
-            raise RuntimeError(f"Failed to submit PBS script: {error_msg}") from e
-
-    except Exception as e:
-        error_occurred = True
-        logger.exception(f"Unexpected error in PBS submission: {e}")
-
-    finally:
-        # Only delete logs on success, keep them for debugging on error
-        if log_file.exists() and not error_occurred:
-            log_file.unlink()
-
 
 
 @router.get("/health")

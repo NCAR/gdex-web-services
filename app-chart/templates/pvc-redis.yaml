@@ -1,0 +1,26 @@
+{{- if and .Values.redis.deploy .Values.redis.persistence.enabled }}
+{{- $redisName := .Values.redis.name }}
+{{- if .Values.testName }}
+{{- $redisName = printf "%s-%s" .Values.testName .Values.redis.name }}
+{{- end }}
+# Storage for the bundled Redis's appendonly file (/data). Not the /glade NFS volume.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $redisName }}-pvc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ $redisName }}
+    {{- if .Values.testName }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+    app.kubernetes.io/name: {{ .Values.testName }}-gdex-web-services
+    app.kubernetes.io/instance: {{ .Values.testName }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- end }}
+    group: {{ .Values.webapp.group }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.redis.persistence.size }}
+{{- end }}

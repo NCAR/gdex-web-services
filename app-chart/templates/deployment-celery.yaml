@@ -1,3 +1,7 @@
+{{- $workerName := .Values.celeryWorker.name }}
+{{- if .Values.testName }}
+{{- $workerName = printf "%s-%s" .Values.testName .Values.celeryWorker.name }}
+{{- end }}
 {{- /* Redis address for the Celery URLs: the bundled Redis Service (redis.deploy),
      prefixed with testName for test releases, or the external redis.host. */}}
 {{- $redisHost := .Values.redis.host }}
@@ -15,43 +19,34 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  {{ if .Values.testName }}
-  name: {{ .Values.testName }}-{{ .Values.webapp.name }}
-  {{ else }}
-  name: {{ .Values.webapp.name }}
-  {{ end }}
+  name: {{ $workerName }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{ if .Values.testName }}
+    app: {{ $workerName }}
+    {{- if .Values.testName }}
     helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
     app.kubernetes.io/name: {{ .Values.testName }}-gdex-web-services
     app.kubernetes.io/instance: {{ .Values.testName }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
-    app: {{ .Values.testName }}-{{ .Values.webapp.name }}
-    {{ else }}
-    app: {{ .Values.webapp.name }}
-    {{ end }}
+    {{- end }}
     group: {{ .Values.webapp.group }}
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ .Values.celeryWorker.replicaCount }}
   selector:
     matchLabels:
-      {{ if .Values.testName }}
-      app: {{ .Values.testName }}-{{ .Values.webapp.name }}
+      app: {{ $workerName }}
+      {{- if .Values.testName }}
       app.kubernetes.io/instance: {{ .Values.testName }}
-      {{ else }}
-      app: {{ .Values.webapp.name }}
-      {{ end }}
+      {{- end }}
   template:
     metadata:
       labels:
-        {{ if .Values.testName }}
-        app: {{ .Values.testName }}-{{ .Values.webapp.name }}
+        app: {{ $workerName }}
+        {{- if .Values.testName }}
         app.kubernetes.io/instance: {{ .Values.testName }}
-        {{ else }}
-        app: {{ .Values.webapp.name }}
-        {{ end }}
+        {{- end }}
     spec:
+      # Own copy of the /glade mount — watch_job / qsub step read JSONL + PBS files
       volumes:
       - name: {{ .Values.webapp.volume.name }}
         nfs:
@@ -59,24 +54,19 @@ spec:
           path: {{ .Values.webapp.volume.path }}
           readOnly: {{ .Values.webapp.volume.readOnly }}
       containers:
-      {{ if .Values.testName }}
-      - name: {{ .Values.testName }}-{{ .Values.webapp.name }}
-      {{ else }}
-      - name: {{ .Values.webapp.name }}
-      {{ end }}
-        image: {{ .Values.webapp.container.image }}
+      - name: {{ $workerName }}
+        image: {{ .Values.celeryWorker.image | default .Values.webapp.container.image }}
         imagePullPolicy: Always
+        command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info",
+                  "--concurrency={{ .Values.celeryWorker.concurrency }}"]
         resources:
           requests:
-            memory: {{ .Values.webapp.container.requests.memory }}
-            cpu: {{ .Values.webapp.container.requests.cpu }}
+            memory: {{ .Values.celeryWorker.resources.requests.memory }}
+            cpu: {{ .Values.celeryWorker.resources.requests.cpu }}
           limits:
-            memory: {{ .Values.webapp.container.limits.memory }}
-            cpu: {{ .Values.webapp.container.limits.cpu }}
-        ports:
-        - containerPort: {{ .Values.webapp.container.port }}
+            memory: {{ .Values.celeryWorker.resources.limits.memory }}
+            cpu: {{ .Values.celeryWorker.resources.limits.cpu }}
         env:
-        # API only enqueues tasks / reads results; the worker does the work
         {{- if .Values.redis.auth.existingSecret }}
         - name: REDIS_PASSWORD
           valueFrom:
@@ -88,6 +78,8 @@ spec:
           value: "redis://{{ $redisAuth }}{{ $redisHost }}:{{ .Values.redis.port }}/{{ .Values.redis.brokerDb }}"
         - name: CELERY_RESULT_BACKEND
           value: "redis://{{ $redisAuth }}{{ $redisHost }}:{{ .Values.redis.port }}/{{ .Values.redis.resultDb }}"
+        # Same secrets as deployment.yaml's API container — the worker needs
+        # dscheck (Postgres) and Boreas (S3) access too.
         - name: OBJECT_STORE_ACCESS_KEY_ID
           valueFrom:
             secretKeyRef:
@@ -108,16 +100,6 @@ spec:
             secretKeyRef:
               name: {{ .Values.webapp.pgdb01Secret.existingSecret.name }}
               key: dssdbpass
-        - name: PGDB01_METAPASS
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.webapp.pgdb01Secret.existingSecret.name }}
-              key: metapass
-        - name: PGDB01_WAGTAILPASS
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.webapp.pgdb01Secret.existingSecret.name }}
-              key: wagtailpass
         volumeMounts:
         - mountPath: {{ .Values.webapp.volume.mountPath }}
           name: {{ .Values.webapp.volume.name }}

@@ -36,3 +36,47 @@ webapp:
       name: pgdb0102-superuser  # reference existing secret named PGDB01
   externalSecret:
     baoPath: kv/gdex/pgdb01
+
+# Redis: Celery broker + result backend, on separate logical DBs.
+redis:
+  # true  = deploy a Redis Deployment/Service/PVC from this chart (own test instance)
+  # false = use an existing external Redis at `host` (e.g. one managed by its own Helm release)
+  deploy: false
+  name: gdex-redis        # used when deploy: true (Service name, prefixed with testName if set)
+  host: redis             # used when deploy: false — Service DNS name of the external Redis
+  port: 6379
+  brokerDb: 0
+  resultDb: 1
+  # Optional password auth for an external Redis: existing Secret + key holding the password.
+  auth:
+    existingSecret: ""  # reference existing secret named gdex-redis-auth. Use empty string if want noAuth
+    passwordKey: redis-password
+  # The settings below only apply when deploy: true
+  image:
+    repository: docker.io/library/redis      # fully-qualified: cluster enforces short-name mode
+    tag: "8.10.2-trixie"
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true         # appendonly yes + PVC, so scheduled retries survive a restart
+    size: 2Gi
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+# Celery worker: runs app/tasks/transform_tasks.py. Scales independently of replicaCount.
+celeryWorker:
+  name: gdex-webservices-celery
+  replicaCount: 2
+  concurrency: 4
+  # image: defaults to webapp.container.image when unset
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 500m
+    limits:
+      memory: 2Gi
+      cpu: 1
