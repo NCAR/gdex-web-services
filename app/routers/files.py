@@ -594,15 +594,11 @@ async def check_access(
 ###################### CELERY ENDPOINTS ######################
 ##############################################################
 from celery import chain
-from app.tasks.portal_tasks import check_recursive_task, compute_size_task
+from uuid import UUID
+from app.tasks.portal_tasks import check_recursive_task, compute_size_task, submit_portal_task
 
 
 @router.get("/get-data-size")
-def get_data_size(path: str):
+def get_data_size(path: str, callback_url: str | None = None, portal_task_id: UUID | None = None):
     workflow = chain(check_recursive_task.s(path), compute_size_task.s())
-    task = workflow.delay()
-
-    return {
-        "task_id": task.id,
-        "status": "submitted"
-    }
+    return submit_portal_task(workflow, callback_url, portal_task_id and str(portal_task_id))
