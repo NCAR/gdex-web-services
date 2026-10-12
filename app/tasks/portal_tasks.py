@@ -14,7 +14,7 @@ def job_response(task_id, status, result=None, portal_task_id=None):
 
   result holds the task's return value on success, or the error message on failure.
   """
-  return {"external_job_id": task_id, "portal_task_id": portal_task_id, "status": status, "result": result}
+  return {"external_job_id": task_id, "id": portal_task_id, "status": status, "result": result}
 
 
 def _portal_task_key(task_id):
