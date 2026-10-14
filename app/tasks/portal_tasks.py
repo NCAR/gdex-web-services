@@ -57,7 +57,13 @@ def _post_to_callback_url(url, payload):
       print("Success")
       print(response.json())
   else:
-      print(f"Failed with status code: {response.status_code}")
+      # The portal explains rejections in a JSON "message" (e.g. secret missing or
+      # mismatched, unknown task id); fall back to the raw body for non-JSON errors
+      try:
+          reason = response.json().get("message", response.text)
+      except (ValueError, AttributeError):
+          reason = response.text[:500]
+      print(f"Callback to {url} failed with status code {response.status_code}: {reason}")
 
 
 @celery_app.task
