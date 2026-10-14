@@ -1,6 +1,7 @@
 """Celery tasks that run directly in the worker pod (no PBS submission)."""
 from app.celery_app import celery_app
 from pathlib import Path
+import os
 import requests
 
 
@@ -49,7 +50,9 @@ def submit_portal_task(sig, callback_url=None, portal_task_id=None):
 
 
 def _post_to_callback_url(url, payload):
-  response = requests.post(url, json=payload)
+  # The portal rejects callbacks without its shared secret (gdex-services-callback-secret)
+  headers = {"X-GDEX-Services-Secret": os.environ.get("GDEX_SERVICES_CALLBACK_SECRET", "")}
+  response = requests.post(url, json=payload, headers=headers)
   if response.ok:
       print("Success")
       print(response.json())

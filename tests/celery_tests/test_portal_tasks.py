@@ -13,6 +13,8 @@ client = TestClient(app)
 
 PORTAL_ID = "3f2b8c1e-9d4a-4e6b-8a7c-1d2e3f4a5b6c"
 CALLBACK = "https://portal/cb"
+SECRET = "test-callback-secret"
+SECRET_HEADERS = {"X-GDEX-Services-Secret": SECRET}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -26,7 +28,8 @@ def worker():
 
 
 @pytest.fixture
-def callback_post():
+def callback_post(monkeypatch):
+    monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", SECRET)
     with patch("app.tasks.portal_tasks.requests.post") as post:
         yield post
 
@@ -124,7 +127,7 @@ class TestCallbacks:
 
         callback_post.assert_called_once_with(CALLBACK, json={
             "external_job_id": job_id, "portal_task_id": PORTAL_ID, "status": "SUCCESS", "result": "Yo, Celery is working!",
-        })
+        }, headers=SECRET_HEADERS)
 
     def test_chain_success_posts_once(self, callback_post, data_dir):
         job_id = client.get("/files/get-data-size", params={"path": str(data_dir), "callback_url": CALLBACK, "portal_task_id": PORTAL_ID}).json()["external_job_id"]
@@ -145,7 +148,7 @@ class TestCallbacks:
             "portal_task_id": PORTAL_ID,
             "status": "FAILURE",
             "result": "The provided endpoint is a URL, but this function only supports endpoint paths on /glade: https://example.com/x",
-        })
+        }, headers=SECRET_HEADERS)
 
     def test_no_callback_url_posts_nothing(self, callback_post, data_dir):
         job_id = client.get("/files/get-data-size", params={"path": str(data_dir)}).json()["external_job_id"]
