@@ -1,0 +1,77 @@
+{{- if .Values.redis.deploy }}
+{{- $redisName := .Values.redis.name }}
+{{- if .Values.testName }}
+{{- $redisName = printf "%s-%s" .Values.testName .Values.redis.name }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $redisName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ $redisName }}
+    {{- if .Values.testName }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+    app.kubernetes.io/name: {{ .Values.testName }}-gdex-web-services
+    app.kubernetes.io/instance: {{ .Values.testName }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- end }}
+    group: {{ .Values.webapp.group }}
+spec:
+  # Single replica by design — the Celery broker is not horizontally scaled.
+  replicas: 1
+  strategy:
+    type: Recreate   # never two redis pods on the same PVC at once
+  selector:
+    matchLabels:
+      app: {{ $redisName }}
+      {{- if .Values.testName }}
+      app.kubernetes.io/instance: {{ .Values.testName }}
+      {{- end }}
+  template:
+    metadata:
+      labels:
+        app: {{ $redisName }}
+        {{- if .Values.testName }}
+        app.kubernetes.io/instance: {{ .Values.testName }}
+        {{- end }}
+    spec:
+      containers:
+      - name: {{ $redisName }}
+        image: {{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}
+        imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+        # --port keeps the server in sync with redis.port (Service/containerPort);
+        # appendonly so scheduled task retries/countdowns survive a restart;
+        # requirepass (from the redis.auth secret) so only clients holding the
+        # password can enqueue tasks or read results
+        command: ["redis-server", "--port", "{{ .Values.redis.port }}"
+                  {{- if .Values.redis.persistence.enabled }}, "--appendonly", "yes"{{ end }}
+                  {{- if .Values.redis.auth.existingSecret }}, "--requirepass", "$(REDIS_PASSWORD)"{{ end }}]
+        ports:
+        - containerPort: {{ .Values.redis.port }}
+        {{- if .Values.redis.auth.existingSecret }}
+        env:
+        # Same Secret/key the API and worker read for their Celery URLs
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.redis.auth.existingSecret }}
+              key: {{ .Values.redis.auth.passwordKey }}
+        {{- end }}
+        resources:
+          requests:
+            memory: {{ .Values.redis.resources.requests.memory }}
+            cpu: {{ .Values.redis.resources.requests.cpu }}
+          limits:
+            memory: {{ .Values.redis.resources.limits.memory }}
+            cpu: {{ .Values.redis.resources.limits.cpu }}
+        {{- if .Values.redis.persistence.enabled }}
+        volumeMounts:
+        - mountPath: /data
+          name: redis-data
+      volumes:
+      - name: redis-data
+        persistentVolumeClaim:
+          claimName: {{ $redisName }}-pvc
+        {{- end }}
+{{- end }}

@@ -166,10 +166,23 @@ def execute_command(cmd: List[str]) -> int:
         Return code from subprocess
     """
     service_log(
-        command_name="execute-command",
+        command_name="parse-payload",
         level="INFO",
         process_message="Executing command",
-        command=" ".join(cmd)
+        cli_command=" ".join(cmd)
     )
-    result = subprocess.run(cmd, capture_output=False, check=True)
+    # Let stdout pass through live (service_log writes there, so the child's own
+    # log/traceback lines land in the jsonl as they happen). Only stderr is
+    # captured, as a fallback for crashes that happen before the child's own
+    # exception handling can run (e.g. interpreter startup failures).
+    result = subprocess.run(cmd, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0:
+        service_log(
+            command_name="parse-payload",
+            level="ERROR",
+            process_message="Command failed",
+            cli_command=" ".join(cmd),
+            return_code=result.returncode,
+            stderr=result.stderr.strip()
+        )
     return result.returncode

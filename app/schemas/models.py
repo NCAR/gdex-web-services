@@ -1,6 +1,6 @@
 """Pydantic models for request/response schemas across all endpoints."""
 
-from typing import Annotated, List
+from typing import Annotated, List, Optional
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 
@@ -53,9 +53,14 @@ class TransformRequest(BaseModel):
             "global-attr-value": "dPayLoadTest",
             "debug": true
             }
-        ]
+        ],
+        "CallbackUrl": "https://portal.example/api/gdex-services-event"
     }
+
+    CallbackUrl is optional. When provided, the final job result is POSTed to
+    it once the PBS job finishes. It is never written into the HPC payload.
     """
     # validate_files is used to ensure that all file paths are relative and do not contain path traversal attempts.
     files: Annotated[List[str], AfterValidator(validate_files)] = Field(alias="Files")
     commands: List[Command] = Field(alias="Commands")
+    callback_url: Optional[str] = Field(default=None, alias="CallbackUrl")

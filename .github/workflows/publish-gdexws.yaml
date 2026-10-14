@@ -65,7 +65,7 @@ jobs:
       - name: Run gdexws tests
         run: |
           pip install ./gdexws pytest
-          pytest tests/test_create_exchange_dir.py -v
+          pytest tests/gdexws_tests -v
         env:
           SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
 

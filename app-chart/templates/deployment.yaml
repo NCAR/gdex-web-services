@@ -1,3 +1,17 @@
+{{- /* Redis address for the Celery URLs: the bundled Redis Service (redis.deploy),
+     prefixed with testName for test releases, or the external redis.host. */}}
+{{- $redisHost := .Values.redis.host }}
+{{- if .Values.redis.deploy }}
+{{- $redisHost = .Values.redis.name }}
+{{- if .Values.testName }}
+{{- $redisHost = printf "%s-%s" .Values.testName .Values.redis.name }}
+{{- end }}
+{{- end }}
+{{- /* With auth, the password is expanded into the URLs by Kubernetes via $(REDIS_PASSWORD). */}}
+{{- $redisAuth := "" }}
+{{- if .Values.redis.auth.existingSecret }}
+{{- $redisAuth = ":$(REDIS_PASSWORD)@" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -62,6 +76,18 @@ spec:
         ports:
         - containerPort: {{ .Values.webapp.container.port }}
         env:
+        # API only enqueues tasks / reads results; the worker does the work
+        {{- if .Values.redis.auth.existingSecret }}
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.redis.auth.existingSecret }}
+              key: {{ .Values.redis.auth.passwordKey }}
+        {{- end }}
+        - name: CELERY_BROKER_URL
+          value: "redis://{{ $redisAuth }}{{ $redisHost }}:{{ .Values.redis.port }}/{{ .Values.redis.brokerDb }}"
+        - name: CELERY_RESULT_BACKEND
+          value: "redis://{{ $redisAuth }}{{ $redisHost }}:{{ .Values.redis.port }}/{{ .Values.redis.resultDb }}"
         - name: OBJECT_STORE_ACCESS_KEY_ID
           valueFrom:
             secretKeyRef:

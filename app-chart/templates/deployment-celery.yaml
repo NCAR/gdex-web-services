@@ -1,0 +1,106 @@
+{{- $workerName := .Values.celeryWorker.name }}
+{{- if .Values.testName }}
+{{- $workerName = printf "%s-%s" .Values.testName .Values.celeryWorker.name }}
+{{- end }}
+{{- /* Redis address for the Celery URLs: the bundled Redis Service (redis.deploy),
+     prefixed with testName for test releases, or the external redis.host. */}}
+{{- $redisHost := .Values.redis.host }}
+{{- if .Values.redis.deploy }}
+{{- $redisHost = .Values.redis.name }}
+{{- if .Values.testName }}
+{{- $redisHost = printf "%s-%s" .Values.testName .Values.redis.name }}
+{{- end }}
+{{- end }}
+{{- /* With auth, the password is expanded into the URLs by Kubernetes via $(REDIS_PASSWORD). */}}
+{{- $redisAuth := "" }}
+{{- if .Values.redis.auth.existingSecret }}
+{{- $redisAuth = ":$(REDIS_PASSWORD)@" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $workerName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ $workerName }}
+    {{- if .Values.testName }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+    app.kubernetes.io/name: {{ .Values.testName }}-gdex-web-services
+    app.kubernetes.io/instance: {{ .Values.testName }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- end }}
+    group: {{ .Values.webapp.group }}
+spec:
+  replicas: {{ .Values.celeryWorker.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ $workerName }}
+      {{- if .Values.testName }}
+      app.kubernetes.io/instance: {{ .Values.testName }}
+      {{- end }}
+  template:
+    metadata:
+      labels:
+        app: {{ $workerName }}
+        {{- if .Values.testName }}
+        app.kubernetes.io/instance: {{ .Values.testName }}
+        {{- end }}
+    spec:
+      # Own copy of the /glade mount — watch_job / qsub step read JSONL + PBS files
+      volumes:
+      - name: {{ .Values.webapp.volume.name }}
+        nfs:
+          server: {{ .Values.webapp.volume.server }}
+          path: {{ .Values.webapp.volume.path }}
+          readOnly: {{ .Values.webapp.volume.readOnly }}
+      containers:
+      - name: {{ $workerName }}
+        image: {{ .Values.celeryWorker.image | default .Values.webapp.container.image }}
+        imagePullPolicy: Always
+        command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info",
+                  "--concurrency={{ .Values.celeryWorker.concurrency }}"]
+        resources:
+          requests:
+            memory: {{ .Values.celeryWorker.resources.requests.memory }}
+            cpu: {{ .Values.celeryWorker.resources.requests.cpu }}
+          limits:
+            memory: {{ .Values.celeryWorker.resources.limits.memory }}
+            cpu: {{ .Values.celeryWorker.resources.limits.cpu }}
+        env:
+        {{- if .Values.redis.auth.existingSecret }}
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.redis.auth.existingSecret }}
+              key: {{ .Values.redis.auth.passwordKey }}
+        {{- end }}
+        - name: CELERY_BROKER_URL
+          value: "redis://{{ $redisAuth }}{{ $redisHost }}:{{ .Values.redis.port }}/{{ .Values.redis.brokerDb }}"
+        - name: CELERY_RESULT_BACKEND
+          value: "redis://{{ $redisAuth }}{{ $redisHost }}:{{ .Values.redis.port }}/{{ .Values.redis.resultDb }}"
+        # Same secrets as deployment.yaml's API container — the worker needs
+        # dscheck (Postgres) and Boreas (S3) access too.
+        - name: OBJECT_STORE_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.webapp.objectStore.secretName }}
+              key: access_key_id
+        - name: OBJECT_STORE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.webapp.objectStore.secretName }}
+              key: secret_key
+        - name: PGDB01_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.webapp.pgdb01Secret.existingSecret.name }}
+              key: password
+        - name: PGDB01_DSSDBPASS
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.webapp.pgdb01Secret.existingSecret.name }}
+              key: dssdbpass
+        volumeMounts:
+        - mountPath: {{ .Values.webapp.volume.mountPath }}
+          name: {{ .Values.webapp.volume.name }}
+          readOnly: {{ .Values.webapp.volume.readOnly }}
