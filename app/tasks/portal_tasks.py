@@ -2,6 +2,7 @@
 from app.celery_app import celery_app
 from pathlib import Path
 import os
+import stat
 import requests
 
 
@@ -92,25 +93,87 @@ def test_task():
 
 
 @celery_app.task
-def check_recursive_task(path):
+def validate_path_task(path):
   is_url = path.startswith("http://") or path.startswith("https://")
   if is_url:
-      # Raising marks the task FAILURE; Celery propagates it to compute_size_task in the chain
+      # Raising marks the task FAILURE; Celery propagates it down the rest of the chain
       raise ValueError(f"The provided endpoint is a URL, but this function only supports endpoint paths on /glade: {path}")
 
   p = Path(path)
   if not p.exists():
       raise FileNotFoundError(f"Path does not exist: {path}")
-  return {"path": path, "is_dir": p.is_dir()}
+  return {"path": path, "is_directory": p.is_dir()}
+
+
+def _others_can_reach(path):
+  """True if every directory above `path` lets other users traverse into it (o+x)."""
+  return all(parent.stat().st_mode & stat.S_IXOTH for parent in path.resolve().parents)
+
+
+def _others_can_list(mode):
+  """True if a directory with this mode can be listed and entered by other users (o+rx)."""
+  return bool(mode & stat.S_IROTH and mode & stat.S_IXOTH)
+
+
+@celery_app.task
+def check_readable_task(check_result):
+  """Check that every file under the path is readable by other users.
+
+  A file counts as unreadable if it lacks o+r, or if any directory above it
+  lacks o+rx (or o+x above the submitted path). Unreadable files are grouped
+  by the directory that holds them. Directories the worker itself can't list
+  are reported in unscanned_directories, since their files can't be checked.
+  """
+  path = check_result["path"]
+  p = Path(path)
+  reachable = _others_can_reach(p)
+  unreadable = {}  # directory -> number of unreadable files in it
+  unscanned = []
+  file_count = 0
+
+  if check_result["is_directory"]:
+      dir_ok = {}  # directory -> whether others can get into it
+      for dirpath, _dirnames, filenames in os.walk(p, followlinks=False, onerror=lambda e: unscanned.append(e.filename)):
+          ok = dir_ok.get(os.path.dirname(dirpath), reachable) and _others_can_list(os.stat(dirpath).st_mode)
+          dir_ok[dirpath] = ok
+          for fname in filenames:
+              try:
+                  mode = os.stat(os.path.join(dirpath, fname)).st_mode
+              except OSError:
+                  continue  # vanished or a broken symlink
+              file_count += 1
+              if not (ok and mode & stat.S_IROTH):
+                  unreadable[dirpath] = unreadable.get(dirpath, 0) + 1
+  else:
+      file_count = 1
+      if not (reachable and p.stat().st_mode & stat.S_IROTH):
+          unreadable[str(p.parent)] = 1
+
+  return {
+      **check_result,
+      "globally_readable": not unreadable and not unscanned,
+      "file_count": file_count,
+      "unreadable_file_count": sum(unreadable.values()),
+      "unreadable_directories": [{"directory": d, "unreadable_files": n} for d, n in sorted(unreadable.items())],
+      "unscanned_directories": sorted(unscanned),
+  }
 
 
 @celery_app.task
 def compute_size_task(check_result):
-  path = check_result["path"]
-  p = Path(path)
+  """Total the path's size in bytes, only once check_readable_task found it all readable."""
+  if not check_result["globally_readable"]:
+      return {**check_result, "size_bytes": None}
 
-  if check_result["is_dir"]:
-      total = sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
-      return {"path": path, "is_directory": True, "size_bytes": total}
+  p = Path(check_result["path"])
+  if not check_result["is_directory"]:
+      return {**check_result, "size_bytes": p.stat().st_size}
 
-  return {"path": path, "is_directory": False, "size_bytes": p.stat().st_size}
+  total = 0
+  for dirpath, _dirnames, filenames in os.walk(p, followlinks=False):
+      for fname in filenames:
+          try:
+              total += os.stat(os.path.join(dirpath, fname)).st_size
+          except OSError:
+              continue
+  return {**check_result, "size_bytes": total}
