@@ -1,9 +1,9 @@
 """Celery tasks that run directly in the worker pod (no PBS submission)."""
 from app.celery_app import celery_app
+from app.utils.callback import post_to_callback_url
 from pathlib import Path
 import os
 import stat
-import requests
 
 
 #####################################
@@ -50,32 +50,15 @@ def submit_portal_task(sig, callback_url=None, portal_task_id=None):
   return job_response(task_id, "SUBMITTED", portal_task_id=portal_task_id)
 
 
-def _post_to_callback_url(url, payload):
-  # The portal rejects callbacks without its shared secret (gdex-services-callback-secret)
-  headers = {"X-GDEX-Services-Secret": os.environ.get("GDEX_SERVICES_CALLBACK_SECRET", "")}
-  response = requests.post(url, json=payload, headers=headers)
-  if response.ok:
-      print("Success")
-      print(response.json())
-  else:
-      # The portal explains rejections in a JSON "message" (e.g. secret missing or
-      # mismatched, unknown task id); fall back to the raw body for non-JSON errors
-      try:
-          reason = response.json().get("message", response.text)
-      except (ValueError, AttributeError):
-          reason = response.text[:500]
-      print(f"Callback to {url} failed with status code {response.status_code}: {reason}")
-
-
 @celery_app.task
 def notify_callback_success(result, callback_url, task_id, portal_task_id=None):
-  _post_to_callback_url(callback_url, job_response(task_id, "SUCCESS", result, portal_task_id))
+  post_to_callback_url(callback_url, job_response(task_id, "SUCCESS", result, portal_task_id))
 
 
 @celery_app.task
 def notify_callback_failure(request, exc, traceback, callback_url, task_id, portal_task_id=None):
   # Celery calls errbacks with (request, exc, traceback) ahead of the signature's own args
-  _post_to_callback_url(callback_url, job_response(task_id, "FAILURE", str(exc), portal_task_id))
+  post_to_callback_url(callback_url, job_response(task_id, "FAILURE", str(exc), portal_task_id))
 
 
 #####################################
@@ -90,7 +73,6 @@ def test_task():
 #####################################
 ######## /router/files Tasks ########
 #####################################
-
 
 @celery_app.task
 def validate_path_task(path):

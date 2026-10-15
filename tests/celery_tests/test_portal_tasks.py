@@ -31,7 +31,7 @@ def worker():
 @pytest.fixture
 def callback_post(monkeypatch):
     monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", SECRET)
-    with patch("app.tasks.portal_tasks.requests.post") as post:
+    with patch("app.utils.callback.requests.post") as post:
         yield post
 
 

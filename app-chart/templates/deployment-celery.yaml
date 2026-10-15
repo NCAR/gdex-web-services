@@ -78,7 +78,7 @@ spec:
           value: "redis://{{ $redisAuth }}{{ $redisHost }}:{{ .Values.redis.port }}/{{ .Values.redis.brokerDb }}"
         - name: CELERY_RESULT_BACKEND
           value: "redis://{{ $redisAuth }}{{ $redisHost }}:{{ .Values.redis.port }}/{{ .Values.redis.resultDb }}"
-        # Sent as X-GDEX-Services-Secret on portal callbacks (portal_tasks._post_to_callback_url);
+        # Sent as X-GDEX-Services-Secret on portal callbacks (app/utils/callback.py post_to_callback_url);
         # the portal's GdexServicesReceiver rejects callbacks without it.
         - name: GDEX_SERVICES_CALLBACK_SECRET
           valueFrom:
