@@ -8,6 +8,7 @@ from typing import Dict, Any
 from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 from celery.result import AsyncResult
 import uuid
 import json
@@ -15,8 +16,8 @@ import logging
 
 from app.schemas.models import TransformRequest
 from app.celery_app import celery_app
-from app.tasks.transform_tasks import celery_transform, notify_callback
-from app.utils import get_dscheck_json
+from app.tasks.transform_tasks import celery_transform, notify_callback, STEP_NAMES
+from app.utils import get_dscheck_json, relpath_validate
 
 # Import RDA/GDEX libraries (rda-python-common) for database interaction and logging.
 try:
@@ -36,6 +37,9 @@ logger = logging.getLogger(__name__)
 
 # set up global constants
 WORKDIR = str(Path('/glade/campaign/collections/gdex/data/exchange/Web-services/'))
+
+# set up callback URL for safety checks
+ALLOWED_CALLBACK_URLs = ["https://gdex.ucar.edu/api/gdex-services-event/"]
 
 
 # `{cindex:int}` only matches all-digit paths, so a UUID falls through to
@@ -97,13 +101,26 @@ def get_celery_status(request_id: str) -> Dict[str, Any]:
     Returns
     -------
     dict
+        - job_type: Always "transform"
         - external_job_id: Request identifier
-        - state: PENDING (log not written yet, or unknown request_id),
+        - status: State of the watch_job task (task_id == request_id):
+          PENDING (log not written yet, or unknown/expired request_id),
           PBS_PROGRESS, PBS_FAILURE_REPORTED (the job logged an ERROR line),
-          SUCCESS (job finished; see info.job_status = completed|failed),
+          SUCCESS (the PBS job reached a terminal line; see result.status =
+          completed|failed, so a failed PBS job is still SUCCESS here),
           or FAILURE (the status watcher itself broke)
-        - info: The latest JSONL log entry (gdexws log_format dict), the
-          final result on SUCCESS, or an error string on FAILURE
+        - result: Depends on status:
+          PBS_PROGRESS / PBS_FAILURE_REPORTED: the latest JSONL log entry
+          (gdexws log_format dict);
+          SUCCESS: the final payload {job_type, external_job_id,
+          status (completed|failed), result (terminal JSONL line), completed};
+          PENDING: {"msg": "log file not written yet"}, or {"msg": null} for
+          an unknown/expired request_id;
+          FAILURE: {"msg": error string}
+        - steps: Celery state of each tracked side task (STEP_NAMES), run as
+          task_id "{request_id}:{step}". PENDING means not started, not
+          requested (no callback_url) or expired.
+        - time: UTC ISO timestamp of this response
 
     Examples
     --------
@@ -124,6 +141,11 @@ def get_celery_status(request_id: str) -> Dict[str, Any]:
         "external_job_id": request_id,
         "status": worker_result.state,
         "result": meta,
+        # Celery-side tasks (not the PBS job); PENDING also means not started / not requested / expired
+        "steps": {
+            step: AsyncResult(f"{request_id}:{step}", app=celery_app).state
+            for step in STEP_NAMES
+        },
         "time": datetime.now(timezone.utc).isoformat()
     }
 
@@ -255,6 +277,20 @@ def post_transform(
     """
     request_id = str(uuid.uuid4())
 
+    # refuse access if callback URL is provided but not in the listed allowed URL
+    #  avoid using callback URL to unauthorized endpoints
+    if request.callback_url is not None and request.callback_url not in ALLOWED_CALLBACK_URLs:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Callback URL not allowed"}
+        )
+
+    # fail fast: refuse any file path that escapes the exchange directory
+    #  before anything is queued or any callback is sent
+    path_check = relpath_validate(request.files)
+    if path_check is not True:
+        return JSONResponse(status_code=403, content=path_check)
+
     # initial callback to provide external job ID to the portal
     if request.callback_url:
         call_back_json = {
@@ -263,9 +299,9 @@ def post_transform(
             "status": "PENDING",
             "result": {"msg": "providing external job ID to the portal"},
         }
-        notify_callback.delay(
-            call_back_json,
-            request.callback_url
+        notify_callback.apply_async(
+            args=[call_back_json, request.callback_url],
+            task_id=f"{request_id}:callback-start",
         )
 
 

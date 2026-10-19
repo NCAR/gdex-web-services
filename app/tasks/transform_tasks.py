@@ -31,6 +31,10 @@ from app.celery_app import celery_app
 from app.schemas.models import TransformRequest
 from app.utils import create_transform_payload, create_pbs_script
 
+# Tracked tasks run under task_id "{request_id}:{name}" (watch_job keeps the bare request_id).
+# GET /compose/status/{request_id} reports the state of each of these.
+STEP_NAMES = ["artifacts", "download", "qsub", "callback-start", "callback-final"]
+
 WORKDIR = str(Path("/glade/campaign/collections/gdex/data/exchange/Web-services/"))
 
 # Terminal process_message values echoed by the PBS script (app/utils/pbs.py)
@@ -191,6 +195,33 @@ def notify_callback(self, result: dict, callback_url: str) -> None:
         raise self.retry(exc=exc, countdown=self.default_retry_delay * 2 ** self.request.retries)
 
 
+@celery_app.task
+def chain_failed(request, exc, traceback, request_id: str, callback_url: Optional[str] = None) -> None:
+    """Error handler (link_error) for the build -> curl -> qsub chain.
+
+    Runs when a chain step fails for good (after its retries). Celery already
+    skips the steps after the failed one; this marks the request FAILURE on the
+    request_id key (what GET /compose/status/{request_id} reads, and what makes
+    watch_job stop polling) and sends the final callback so the portal is told.
+    The failing step is the suffix of its task id ("{request_id}:{step}").
+    """
+    step = request.id.rsplit(":", 1)[-1]
+    msg = f"Step '{step}' failed: {exc!r}"
+    celery_app.backend.mark_as_failure(request_id, RuntimeError(msg), traceback=traceback)
+
+    if callback_url:
+        notify_callback.apply_async(
+            args=[{
+                "job_type": "transform",
+                "external_job_id": request_id,
+                "status": "FAILURE",
+                "result": {"step": step, "msg": msg},
+                "completed": datetime.now(timezone.utc).isoformat(),
+            }, callback_url],
+            task_id=f"{request_id}:callback-final",
+        )
+
+
 @celery_app.task(bind=True, track_started=False)
 def watch_job(self, request_id: str, callback_url: Optional[str] = None, last_line: int = 0,
               last_refresh: Optional[float] = None):
@@ -208,7 +239,8 @@ def watch_job(self, request_id: str, callback_url: Optional[str] = None, last_li
       PBS_PROGRESS          latest JSONL line, level != ERROR (info = that line)
       PBS_FAILURE_REPORTED  latest JSONL line, level == ERROR (info = that line), PBS job error reported
       SUCCESS           terminal line seen; info.job_status = completed|failed
-      FAILURE           the celery worker/watcher itself broke (bad JSON, I/O error, bug)
+      FAILURE           the celery worker/watcher itself broke (bad JSON, I/O error, bug),
+                        or a chain step failed (set by chain_failed; polling then stops)
 
     Independently invokable: nothing here requires having come from
     POST /compose/transform. For a job re-run by hand on HPC:
@@ -240,6 +272,11 @@ def watch_job(self, request_id: str, callback_url: Optional[str] = None, last_li
        - meta.msg = where the log file is, e.g. "Completed successfully. Check the {log_path} for details."
     """
     log_path = Path(WORKDIR) / f"{request_id}.gdexws.jsonl"
+
+    # a chain step failed: chain_failed already marked this request FAILURE and notified
+    # the callback, so stop polling and keep that state
+    if self.AsyncResult(request_id).state == "FAILURE":
+        raise Ignore()
 
     # if log does not exist
     if not log_path.exists():
@@ -278,32 +315,36 @@ def watch_job(self, request_id: str, callback_url: Optional[str] = None, last_li
         if msg in (PBS_COMPLETED, PBS_FAILED):
             # Terminal line: the PBS job has finished, successfully or not
             if msg == PBS_COMPLETED:
-                job_status = "completed"
+                job_status = "SUCCESS"
                 self.update_state(
-                    state="SUCCESS",
+                    state=job_status,
                     meta={"msg": f"Completed successfully. Check the {log_path} for details."}
                 )
             else:
-                job_status = "failed"
+                job_status = STATE_PBS_FAILURE_REPORTED
                 self.update_state(
-                    state=STATE_PBS_FAILURE_REPORTED,  # FAILURE state is reserved for celery worker errors
+                    state=job_status,  # FAILURE state is reserved for celery worker errors
                     meta={"msg": f"Completed with exit code 1 during transform. Check the {log_path} for details."}
                 )
 
-            # the result "job_status" is the PBS job status not the task status
+            # the "job_status" is the same state name written above (SUCCESS or PBS_FAILURE_REPORTED)
             # which is what we report back to the callback and ultimately to the client
             call_back_json = {
-                "job_type": "transform", 
-                "external_job_id": request_id, 
+                "job_type": "transform",
+                "external_job_id": request_id,
                 "status": job_status,
                 "result": entry,      # add the JSONL line itself (command, time_of_process, level, ...)
                 "completed": datetime.now(timezone.utc).isoformat(),
             }
 
             if callback_url:  # only if one was provided in the payload
-                notify_callback.delay(call_back_json, callback_url)
+                notify_callback.apply_async(
+                    args=[call_back_json, callback_url],
+                    task_id=f"{request_id}:callback-final",
+                )
             # after notifying the callback, we can stop watching as the job has reached a terminal state
-            return call_back_json
+            # Ignore (no reschedule) keeps the state/meta written above; a return would overwrite them with SUCCESS
+            raise Ignore()
 
     # only update the state with the latest entry if there are new entries
     latest = new_entries[-1]
@@ -334,10 +375,11 @@ def celery_transform(request_dict: dict, request_id: str, specialist: str) -> No
     and the PBS script never see it.
     """
     chain(
-        create_boreas_artifacts.s(request_dict, request_id),
-        add_dscheck_download.s(specialist), # the first arg is the return of the previous task
-        add_dscheck_qsub.s(),
-    ).apply_async()
+        create_boreas_artifacts.s(request_dict, request_id).set(task_id=f"{request_id}:artifacts"),
+        # the first arg is the return of the previous task
+        add_dscheck_download.s(specialist).set(task_id=f"{request_id}:download"),
+        add_dscheck_qsub.s().set(task_id=f"{request_id}:qsub"),
+    ).apply_async(link_error=chain_failed.s(request_id, request_dict.get("CallbackUrl")))
 
     # initialize the watch job for this request
     # (the watcher will keep retrying until the PBS job finishes or fails)
