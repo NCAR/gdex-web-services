@@ -100,6 +100,11 @@ spec:
             secretKeyRef:
               name: {{ .Values.webapp.pgdb01Secret.existingSecret.name }}
               key: dssdbpass
+        - name: GDEX_SERVICES_CALLBACK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.webapp.callbackSecret.name }}
+              key: {{ .Values.webapp.callbackSecret.key }}
         volumeMounts:
         - mountPath: {{ .Values.webapp.volume.mountPath }}
           name: {{ .Values.webapp.volume.name }}

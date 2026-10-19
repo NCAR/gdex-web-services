@@ -5,7 +5,7 @@ This module defines endpoints for compose action (i.e. transform ... etc), and i
 
 """
 from typing import Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from celery.result import AsyncResult
@@ -15,7 +15,7 @@ import logging
 
 from app.schemas.models import TransformRequest
 from app.celery_app import celery_app
-from app.tasks.transform_tasks import celery_transform
+from app.tasks.transform_tasks import celery_transform, notify_callback
 from app.utils import get_dscheck_json
 
 # Import RDA/GDEX libraries (rda-python-common) for database interaction and logging.
@@ -97,7 +97,7 @@ def get_celery_status(request_id: str) -> Dict[str, Any]:
     Returns
     -------
     dict
-        - request_id: Request identifier
+        - external_job_id: Request identifier
         - state: PENDING (log not written yet, or unknown request_id),
           PBS_PROGRESS, PBS_FAILURE_REPORTED (the job logged an ERROR line),
           SUCCESS (job finished; see info.job_status = completed|failed),
@@ -109,12 +109,22 @@ def get_celery_status(request_id: str) -> Dict[str, Any]:
     --------
     >>> curl -X GET https://api_url/compose/status/550e8400-e29b-41d4-a716-446655440000
     """
-    result = AsyncResult(request_id, app=celery_app)
-    info = result.info
+    worker_result = AsyncResult(request_id, app=celery_app)
+    meta = worker_result.info
+    # parse the latest log entry if it exists
+    if isinstance(meta, dict):
+        pass
+    else:
+        # FAILURE gives an Exception instance,
+        # An unknown request_id gives None
+        meta = {"msg": str(meta) if meta else None}
+
     return {
-        "request_id": request_id,
-        "state": result.state,
-        "info": info if isinstance(info, dict) or info is None else str(info),
+        "job_type": "transform",
+        "external_job_id": request_id,
+        "status": worker_result.state,
+        "result": meta,
+        "time": datetime.now(timezone.utc).isoformat()
     }
 
 
@@ -244,6 +254,21 @@ def post_transform(
     
     """
     request_id = str(uuid.uuid4())
+
+    # initial callback to provide external job ID to the portal
+    if request.callback_url:
+        call_back_json = {
+            "job_type": "transform", 
+            "external_job_id": request_id, 
+            "status": "PENDING",
+            "result": {"msg": "providing external job ID to the portal"},
+        }
+        notify_callback.delay(
+            call_back_json,
+            request.callback_url
+        )
+
+
     try:
         # Queue the transform job with Celery
         # maintain the PascalCase format on key name to match the expected JSON structure that pass to the celery worker
