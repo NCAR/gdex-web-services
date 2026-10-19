@@ -253,6 +253,29 @@ class TestChainFailed:
         assert AsyncResult("rid-f", app=celery_app).state == "FAILURE"
 
 
+class TestCeleryTransformPublishOrder:
+    def test_watcher_published_before_chain(self):
+        order = []
+        fake_chain = MagicMock()
+        fake_chain.return_value.apply_async.side_effect = lambda **kw: order.append("chain")
+        with patch.object(transform_tasks, "chain", fake_chain), \
+             patch.object(transform_tasks.watch_job, "apply_async",
+                          side_effect=lambda **kw: order.append("watcher")):
+            transform_tasks.celery_transform(REQUEST_DICT, "rid-o", "chiaweih")
+
+        assert order == ["watcher", "chain"]
+
+    def test_chain_publish_failure_stops_the_watcher(self):
+        fake_chain = MagicMock()
+        fake_chain.return_value.apply_async.side_effect = RuntimeError("redis down")
+        with patch.object(transform_tasks, "chain", fake_chain), \
+             patch.object(transform_tasks.watch_job, "apply_async"):
+            with pytest.raises(RuntimeError, match="redis down"):
+                transform_tasks.celery_transform(REQUEST_DICT, "rid-p", "chiaweih")
+
+        assert AsyncResult("rid-p", app=celery_app).state == "FAILURE"
+
+
 class TestNotifyCallback:
     def test_posts_result_with_secret_header(self, monkeypatch):
         monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", "s3cret")

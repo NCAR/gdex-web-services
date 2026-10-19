@@ -1,4 +1,5 @@
 import json
+import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,19 +20,23 @@ PAYLOAD = {
 @pytest.fixture
 def mock_pipeline(tmp_path):
     """Run the real pipeline eagerly with Boreas/dscheck mocked and WORKDIR
-    on tmp_path; pre-create the downloaded PBS script and a finished JSONL
-    log so the chain and watch_job both complete in one pass."""
+    on tmp_path. The request_id is fixed so the downloaded PBS script and a
+    finished JSONL log exist up front: the watcher is published before the
+    chain, so it must find the log on its first (eager) poll."""
     db = MagicMock()
     db.pgadd = MagicMock(side_effect=[111, 222])
 
+    request_id = uuid.uuid4()
+    (tmp_path / f"transform.{request_id}.pbs").write_text("#!/bin/bash")
+    (tmp_path / f"{request_id}.gdexws.jsonl").write_text(json.dumps(
+        {"command": "pbs", "time_of_process": "t", "level": "INFO", "process_message": "PBS job completed"}
+    ) + "\n")
+
     def fake_pbs(payload_url, request_id):
-        (tmp_path / f"transform.{request_id}.pbs").write_text("#!/bin/bash")
-        (tmp_path / f"{request_id}.gdexws.jsonl").write_text(json.dumps(
-            {"command": "pbs", "time_of_process": "t", "level": "INFO", "process_message": "PBS job completed"}
-        ) + "\n")
         return f"https://b/transform.{request_id}.pbs"
 
-    with patch.object(transform_tasks, "WORKDIR", str(tmp_path)), \
+    with patch.object(compose.uuid, "uuid4", return_value=request_id), \
+         patch.object(transform_tasks, "WORKDIR", str(tmp_path)), \
          patch.object(transform_tasks, "PgDBI", return_value=db), \
          patch.object(transform_tasks, "create_transform_payload", return_value="https://b/payload.json"), \
          patch.object(transform_tasks, "create_pbs_script", side_effect=fake_pbs), \
