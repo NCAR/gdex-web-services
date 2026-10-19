@@ -15,6 +15,7 @@ callback URL was supplied.
 """
 import os
 import json
+import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 from celery import chain
+from celery.result import AsyncResult
 from celery.exceptions import Ignore
 
 from rda_python_common.pg_dbi import PgDBI
@@ -30,6 +32,8 @@ from rda_python_common.pg_log import PgLOG
 from app.celery_app import celery_app
 from app.schemas.models import TransformRequest
 from app.utils import create_transform_payload, create_pbs_script
+
+logger = logging.getLogger(__name__)
 
 # Tracked tasks run under task_id "{request_id}:{name}" (watch_job keeps the bare request_id).
 # GET /compose/status/{request_id} reports the state of each of these.
@@ -204,8 +208,19 @@ def chain_failed(request, exc, traceback, request_id: str, callback_url: Optiona
     request_id key (what GET /compose/status/{request_id} reads, and what makes
     watch_job stop polling) and sends the final callback so the portal is told.
     The failing step is the suffix of its task id ("{request_id}:{step}").
+
+    A duplicate run of the chain (redelivered message) can fail after another run already
+    got the job going. Only act while the request is still PENDING (watch_job has seen no
+    log yet); any other state means the job is tracked, finished, or already failed.
     """
     step = request.id.rsplit(":", 1)[-1]
+    current = AsyncResult(request_id, app=celery_app).state
+    if current != "PENDING":
+        logger.warning(
+            f"Ignoring failure of step '{step}' for request_id={request_id}: "
+            f"request already in state {current} (duplicate chain run?)"
+        )
+        return
     msg = f"Step '{step}' failed: {exc!r}"
     celery_app.backend.mark_as_failure(request_id, RuntimeError(msg), traceback=traceback)
 
@@ -374,16 +389,25 @@ def celery_transform(request_dict: dict, request_id: str, specialist: str) -> No
     callback_url only ever travels to watch_job — the chain, the dscheck rows
     and the PBS script never see it.
     """
-    chain(
-        create_boreas_artifacts.s(request_dict, request_id).set(task_id=f"{request_id}:artifacts"),
-        # the first arg is the return of the previous task
-        add_dscheck_download.s(specialist).set(task_id=f"{request_id}:download"),
-        add_dscheck_qsub.s().set(task_id=f"{request_id}:qsub"),
-    ).apply_async(link_error=chain_failed.s(request_id, request_dict.get("CallbackUrl")))
+    callback_url = request_dict.get("CallbackUrl")
 
-    # initialize the watch job for this request
-    # (the watcher will keep retrying until the PBS job finishes or fails)
-    watch_job.apply_async(
-        args=[request_id, request_dict.get("CallbackUrl")],
-        task_id=request_id,
-    )
+    # Watcher first: it idles in PENDING until the job log appears, so starting it early is
+    # harmless. If the chain publish then fails, the stray watcher is stopped below; the
+    # other order could leave a running job that nothing tracks.
+    watch_job.apply_async(args=[request_id, callback_url], task_id=request_id)
+
+    try:
+        chain(
+            create_boreas_artifacts.s(request_dict, request_id).set(task_id=f"{request_id}:artifacts"),
+            # the first arg is the return of the previous task
+            add_dscheck_download.s(specialist).set(task_id=f"{request_id}:download"),
+            add_dscheck_qsub.s().set(task_id=f"{request_id}:qsub"),
+        ).apply_async(link_error=chain_failed.s(request_id, callback_url))
+    except Exception as exc:
+        # nothing will run: stop the watcher (it checks for FAILURE on every poll). Best effort,
+        # the backend is the same Redis that just failed.
+        try:
+            celery_app.backend.mark_as_failure(request_id, exc)
+        except Exception:
+            logger.exception(f"Could not mark request_id={request_id} failed after chain publish error")
+        raise
