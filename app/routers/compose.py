@@ -291,21 +291,20 @@ def post_transform(
     if path_check is not True:
         return JSONResponse(status_code=403, content=path_check)
 
-    # initial callback to provide external job ID to the portal
-    if request.callback_url:
-        call_back_json = {
-            "job_type": "transform", 
-            "external_job_id": request_id, 
-            "status": "PENDING",
-            "result": {"msg": "providing external job ID to the portal"},
-        }
-        notify_callback.apply_async(
-            args=[call_back_json, request.callback_url],
-            task_id=f"{request_id}:callback-start",
-        )
-
-
     try:
+        # initial callback to provide external job ID to the portal
+        if request.callback_url:
+            call_back_json = {
+                "job_type": "transform", 
+                "external_job_id": request_id, 
+                "status": "PENDING",
+                "result": {"msg": "providing external job ID to the portal"},
+            }
+            notify_callback.apply_async(
+                args=[call_back_json, request.callback_url],
+                task_id=f"{request_id}:callback-start",
+            )
+
         # Queue the transform job with Celery
         # maintain the PascalCase format on key name to match the expected JSON structure that pass to the celery worker
         celery_transform(request.model_dump(by_alias=True), request_id, specialist)
