@@ -269,18 +269,20 @@ def post_transform(
                  "global-attr-name": "gdex_dsid",
                  "global-attr-value": "d99ext9",
                  "debug": true
-               },
+               }
              ],
              "CallbackUrl": ""
            }'
     
     """
+    # Generate external job ID for tracking the transform request
     request_id = str(uuid.uuid4())
 
     # refuse access if callback URL is provided but not in the listed allowed URL
     #  avoid using callback URL to unauthorized endpoints
     if request.callback_url == "":
         request.callback_url = None
+
     if request.callback_url is not None and request.callback_url not in ALLOWED_CALLBACK_URLs:
         return JSONResponse(
             status_code=403,
@@ -294,25 +296,12 @@ def post_transform(
         return JSONResponse(status_code=403, content=path_check)
 
     try:
-        # initial callback to provide external job ID to the portal
-        if request.callback_url:
-            call_back_json = {
-                "job_type": "transform", 
-                "external_job_id": request_id, 
-                "status": "PENDING",
-                "result": {"msg": "providing external job ID to the portal"},
-            }
-            notify_callback.apply_async(
-                args=[call_back_json, request.callback_url],
-                task_id=f"{request_id}:callback-start",
-            )
-
         # Queue the transform job with Celery
         # maintain the PascalCase format on key name to match the expected JSON structure that pass to the celery worker
         celery_transform(request.model_dump(by_alias=True), request_id, specialist)
         # Only place request_id is tied to who submitted it (not in the access log)
         logger.info(
-            f"Transform queued request_id={request_id} issuer={issuer} specialist={specialist} "
+            f"Transform queued external_job_id={request_id} issuer={issuer} specialist={specialist} "
             f"files={len(request.files)} callback={'yes' if request.callback_url else 'no'}"
         )
     except Exception as e:
@@ -321,11 +310,12 @@ def post_transform(
         raise HTTPException(status_code=503, detail=f"Failed to queue transform job: {e}") from e
 
     return {
-        "request_id": request_id,
+        "external_job_id": request_id,
         "issuer": issuer,
         "status_message": "Transform job accepted and queued",
         "status_url": f"/compose/status/{request_id}",
         "log_url": f"/compose/log/{request_id}",
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 
@@ -335,6 +325,6 @@ async def health_check() -> Dict[str, Any]:
     return {
         "status": "healthy",
         "service": "gdex-dscheck-test-api",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "rda_available": RDA_AVAILABLE
     }
