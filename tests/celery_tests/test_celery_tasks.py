@@ -5,7 +5,8 @@ import pytest
 from celery.result import AsyncResult
 
 from app.celery_app import celery_app
-from app.tasks import transform_tasks
+from app.tasks import callback_task, transform_tasks
+from app.tasks.callback_task import CallbackError
 from gdexws.utils.logging import log_format
 
 REQUEST_DICT = {
@@ -280,10 +281,11 @@ class TestNotifyCallback:
     def test_posts_result_with_secret_header(self, monkeypatch):
         monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", "s3cret")
         payload = {"external_job_id": "rid", "status": "SUCCESS"}
-        with patch.object(transform_tasks.httpx, "post") as post:
-            post.return_value = MagicMock(raise_for_status=MagicMock())
-            transform_tasks.notify_callback.apply(args=[payload, "https://portal/cb"]).get()
+        with patch.object(callback_task.httpx, "post") as post:
+            post.return_value = MagicMock(status_code=200, raise_for_status=MagicMock())
+            result = callback_task.notify_callback.apply(args=[payload, "https://portal/cb"])
 
+        assert result.get() == {"http_status": 200}
         post.assert_called_once_with(
             "https://portal/cb",
             json=payload,
@@ -291,13 +293,49 @@ class TestNotifyCallback:
             timeout=10,
         )
 
-    def test_retries_on_http_error(self, monkeypatch):
+    @staticmethod
+    def _status_error(code):
+        request = callback_task.httpx.Request("POST", "https://portal/cb")
+        response = callback_task.httpx.Response(code, request=request)
+        return MagicMock(status_code=code, raise_for_status=MagicMock(
+            side_effect=callback_task.httpx.HTTPStatusError("err", request=request, response=response)))
+
+    @pytest.mark.parametrize("code", [400, 401, 403, 404])
+    def test_4xx_fails_fast_with_http_status(self, monkeypatch, code):
         monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", "s3cret")
-        with patch.object(transform_tasks.httpx, "post", side_effect=transform_tasks.httpx.ConnectError("down")) as post:
-            result = transform_tasks.notify_callback.apply(args=[{}, "https://portal/cb"])
+        with patch.object(callback_task.httpx, "post", return_value=self._status_error(code)) as post:
+            result = callback_task.notify_callback.apply(args=[{}, "https://portal/cb"])
+
+        assert post.call_count == 1  # no retry
+        assert result.state == "FAILURE"
+        assert isinstance(result.result, CallbackError)
+        assert result.result.args == (f"Portal callback returned HTTP {code}", code)
+
+    @pytest.mark.parametrize("code", [408, 429, 500, 503])
+    def test_retryable_status_retries_then_fails_with_http_status(self, monkeypatch, code):
+        monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", "s3cret")
+        with patch.object(callback_task.httpx, "post", return_value=self._status_error(code)) as post:
+            result = callback_task.notify_callback.apply(args=[{}, "https://portal/cb"])
+
+        assert post.call_count == 1 + callback_task.notify_callback.max_retries
+        assert result.state == "FAILURE"
+        assert result.result.args[1] == code
+
+    def test_network_error_failure_has_no_http_status(self, monkeypatch):
+        monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", "s3cret")
+        with patch.object(callback_task.httpx, "post", side_effect=callback_task.httpx.ConnectError("down")):
+            result = callback_task.notify_callback.apply(args=[{}, "https://portal/cb"])
 
         assert result.state == "FAILURE"
-        assert post.call_count == 1 + transform_tasks.notify_callback.max_retries
+        assert result.result.args[1] is None
+
+    def test_retries_on_http_error(self, monkeypatch):
+        monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", "s3cret")
+        with patch.object(callback_task.httpx, "post", side_effect=callback_task.httpx.ConnectError("down")) as post:
+            result = callback_task.notify_callback.apply(args=[{}, "https://portal/cb"])
+
+        assert result.state == "FAILURE"
+        assert post.call_count == 1 + callback_task.notify_callback.max_retries
 
 
 class TestStartTransformPipeline:

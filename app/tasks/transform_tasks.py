@@ -13,7 +13,6 @@ plus, in parallel, watch_job (task_id == request_id), which tails
 GET /compose/status/{request_id}, then fires notify_callback if a
 callback URL was supplied.
 """
-import os
 import json
 import logging
 import time
@@ -21,7 +20,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import httpx
 from celery import chain
 from celery.result import AsyncResult
 from celery.exceptions import Ignore
@@ -31,6 +29,7 @@ from rda_python_common.pg_log import PgLOG
 
 from app.celery_app import celery_app
 from app.schemas.models import TransformRequest
+from app.tasks.callback_task import notify_callback, mark_callback_waiting
 from app.utils import create_transform_payload, create_pbs_script
 
 logger = logging.getLogger(__name__)
@@ -172,33 +171,6 @@ def _read_complete_jsons(log_path: Path) -> list:
     return lines[:-1]
 
 
-@celery_app.task(bind=True, max_retries=5, default_retry_delay=10)
-def notify_callback(self, result: dict, callback_url: str) -> None:
-    """POST the final job result to the portal's callback URL.
-
-    Deliberately separate from watch_job: a portal endpoint gets its
-    own retry/backoff and doesn't affect tracking of the PBS job itself.
-    Delivery is at-least-once, so the receiver should treat repeats for the
-    same request_id as idempotent.
-    """
-
-    shared_secret = os.environ["GDEX_SERVICES_CALLBACK_SECRET"]
-    try:
-        resp = httpx.post(
-            callback_url, 
-            json=result,
-            headers={
-                "Content-Type": "application/json",
-                "X-GDEX-Services-Secret": shared_secret
-            },
-            timeout=10
-        )
-        resp.raise_for_status()
-    # if the HTTP POST fails, retry with exponential backoff
-    except httpx.HTTPError as exc:
-        raise self.retry(exc=exc, countdown=self.default_retry_delay * 2 ** self.request.retries)
-
-
 @celery_app.task
 def chain_failed(request, exc, traceback, request_id: str, callback_url: Optional[str] = None) -> None:
     """Error handler (link_error) for the build -> curl -> qsub chain.
@@ -225,14 +197,15 @@ def chain_failed(request, exc, traceback, request_id: str, callback_url: Optiona
     celery_app.backend.mark_as_failure(request_id, RuntimeError(msg), traceback=traceback)
 
     if callback_url:
+        call_back_json = {
+            "job_type": "transform",
+            "external_job_id": request_id,
+            "status": "FAILURE",
+            "result": {"step": step, "msg": msg},
+            "completed": datetime.now(timezone.utc).isoformat(),
+        }
         notify_callback.apply_async(
-            args=[{
-                "job_type": "transform",
-                "external_job_id": request_id,
-                "status": "FAILURE",
-                "result": {"step": step, "msg": msg},
-                "completed": datetime.now(timezone.utc).isoformat(),
-            }, callback_url],
+            args=[call_back_json,callback_url],
             task_id=f"{request_id}:callback-final",
         )
 
@@ -390,6 +363,10 @@ def celery_transform(request_dict: dict, request_id: str, specialist: str) -> No
     and the PBS script never see it.
     """
     callback_url = request_dict.get("CallbackUrl")
+
+    # record that a callback is expected before anything can finish and fire it
+    if callback_url:
+        mark_callback_waiting(request_id)
 
     # Watcher first: it idles in PENDING until the job log appears, so starting it early is
     # harmless. If the chain publish then fails, the stray watcher is stopped below; the

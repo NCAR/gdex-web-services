@@ -16,7 +16,8 @@ import logging
 
 from app.schemas.models import TransformRequest
 from app.celery_app import celery_app
-from app.tasks.transform_tasks import celery_transform, notify_callback, STEP_NAMES
+from app.tasks.callback_task import CallbackError
+from app.tasks.transform_tasks import celery_transform, STEP_NAMES
 from app.utils import get_dscheck_json, relpath_validate
 
 # Import RDA/GDEX libraries (rda-python-common) for database interaction and logging.
@@ -120,6 +121,15 @@ def get_celery_status(request_id: str) -> Dict[str, Any]:
         - steps: Celery state of each tracked side task (STEP_NAMES), run as
           task_id "{request_id}:{step}". PENDING means not started, not
           requested (no callback_url) or expired.
+        - callback: {requested, status, info} for the portal callback_url.
+          requested is false when no callback_url was given (or the record expired).
+          status: NOT_REQUESTED, WAITING (job not finished yet), RETRY (portal POST
+          failed with a retryable error, backing off), SUCCESS (delivered) or
+          FAILURE (rejected with a 4xx, or retries exhausted).
+          info: {"http_status": 2xx} on SUCCESS; {"msg", "http_status"} on RETRY / FAILURE,
+          where http_status is the portal's status code (null if it was never reached);
+          null otherwise.
+          A 4xx other than 408/429 fails at once with no retry.
         - time: UTC ISO timestamp of this response
 
     Examples
@@ -136,15 +146,33 @@ def get_celery_status(request_id: str) -> Dict[str, Any]:
         # An unknown request_id gives None
         meta = {"msg": str(meta) if meta else None}
 
+    steps = {
+        step: AsyncResult(f"{request_id}:{step}", app=celery_app).state
+        for step in STEP_NAMES
+    }
+    # a requested callback is marked WAITING at submit time, so PENDING here means none was asked for
+    callback_result = AsyncResult(f"{request_id}:callback-final", app=celery_app)
+    callback_state = callback_result.state
+    callback_requested = callback_state != "PENDING"
+    callback_info = callback_result.info
+    if isinstance(callback_info, CallbackError):
+        # FAILURE / RETRY: the portal's HTTP status (None if it was never reached)
+        message, http_status = callback_info.args
+        callback_info = {"msg": message, "http_status": http_status}
+    elif not isinstance(callback_info, dict):
+        callback_info = None
+
     return {
         "job_type": "transform",
         "external_job_id": request_id,
         "status": worker_result.state,
         "result": meta,
         # Celery-side tasks (not the PBS job); PENDING also means not started / not requested / expired
-        "steps": {
-            step: AsyncResult(f"{request_id}:{step}", app=celery_app).state
-            for step in STEP_NAMES
+        "steps": steps,
+        "callback": {
+            "requested": callback_requested,
+            "status": callback_state if callback_requested else "NOT_REQUESTED",
+            "info": callback_info,
         },
         "time": datetime.now(timezone.utc).isoformat()
     }
