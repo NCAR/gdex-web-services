@@ -48,8 +48,8 @@ redis:
   # true  = deploy a Redis Deployment/Service/PVC from this chart (own test instance)
   # false = use an existing external Redis at `host` (e.g. one managed by its own Helm release)
   deploy: false
-  name: gdex-redis        # used when deploy: true (Service name, prefixed with testName if set)
-  host: redis             # used when deploy: false — Service DNS name of the external Redis
+  name: gdex-redis        # used when deploy : true (Service name, prefixed with testName - for test instance)
+  host: redis             # used when deploy : false (Service DNS name of the external Redis - - for prod)
   port: 6379
   brokerDb: 0
   resultDb: 1

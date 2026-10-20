@@ -259,26 +259,28 @@ def post_transform(
 
     Examples
     --------
-    >>> curl -X POST https://0.0.0.0:8080/compose/transform \\
-    ...   -H "Content-Type: application/json" \\
-    ...   -d '{
-    ...     "Files": ["Web-services/test.nc"],
-    ...     "Commands": [
-    ...       {
-    ...         "command": "add_global_meta",
-    ...         "global-attr-name": "gdex_dsid",
-    ...         "global-attr-value": "d99ext9",
-    ...         "debug": true
-    ...       },
-    ...     ],
-    ...     "CallbackUrl": "https://example.com/callback"
-    ...   }'
+    >>> curl -X POST https://gdex-services.k8s.ucar.edu/compose/transform \\
+           -H "Content-Type: application/json" \\
+           -d '{
+             "Files": ["Web-services/test.nc"],
+             "Commands": [
+               {
+                 "command": "add_global_meta",
+                 "global-attr-name": "gdex_dsid",
+                 "global-attr-value": "d99ext9",
+                 "debug": true
+               },
+             ],
+             "CallbackUrl": ""
+           }'
     
     """
     request_id = str(uuid.uuid4())
 
     # refuse access if callback URL is provided but not in the listed allowed URL
     #  avoid using callback URL to unauthorized endpoints
+    if request.callback_url == "":
+        request.callback_url = None
     if request.callback_url is not None and request.callback_url not in ALLOWED_CALLBACK_URLs:
         return JSONResponse(
             status_code=403,
