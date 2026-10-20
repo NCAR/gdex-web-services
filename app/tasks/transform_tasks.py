@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # Tracked tasks run under task_id "{request_id}:{name}" (watch_job keeps the bare request_id).
 # GET /compose/status/{request_id} reports the state of each of these.
-STEP_NAMES = ["artifacts", "download", "qsub", "callback-start", "callback-final"]
+STEP_NAMES = ["artifacts", "download", "qsub", "callback-final"]
 
 WORKDIR = str(Path("/glade/campaign/collections/gdex/data/exchange/Web-services/"))
 

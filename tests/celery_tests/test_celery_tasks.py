@@ -144,15 +144,18 @@ class TestWatchJob:
         ("PBS job failed", "ERROR", "PBS_FAILURE_REPORTED"),
     ])
     def test_terminal_line_sets_state(self, workdir, message, level, state):
-        _write_jsonl(workdir / "rid-1.gdexws.jsonl", [_pbs_line("PBS job started"), _pbs_line(message, level)])
+        # unique id per case: the in-memory backend persists across tests and Celery never
+        # overwrites a stored SUCCESS, so a shared id would hide the second case's state
+        rid = f"rid-{state}"
+        _write_jsonl(workdir / f"{rid}.gdexws.jsonl", [_pbs_line("PBS job started"), _pbs_line(message, level)])
         with patch.object(transform_tasks.notify_callback, "apply_async") as notify:
-            transform_tasks.watch_job.apply(args=["rid-1"], task_id="rid-1")
+            transform_tasks.watch_job.apply(args=[rid], task_id=rid)
 
         # A failed PBS job is PBS_FAILURE_REPORTED (FAILURE is reserved for worker errors);
         # the task ends with Ignore, so the state/meta from update_state are what is stored
-        status = AsyncResult("rid-1", app=celery_app)
+        status = AsyncResult(rid, app=celery_app)
         assert status.state == state
-        assert str(workdir / "rid-1.gdexws.jsonl") in status.info["msg"]
+        assert str(workdir / f"{rid}.gdexws.jsonl") in status.info["msg"]
         notify.assert_not_called()
 
     def test_terminal_line_fires_callback_when_provided(self, workdir):

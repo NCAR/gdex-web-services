@@ -50,7 +50,7 @@ class TestPostTransform:
 
         assert resp.status_code == 200
         body = resp.json()
-        rid = body["request_id"]
+        rid = body["external_job_id"]
         assert body["issuer"] == "user@ucar.edu"
         assert body["status_url"] == f"/compose/status/{rid}"
         assert body["log_url"] == f"/compose/log/{rid}"
@@ -60,7 +60,7 @@ class TestPostTransform:
         mock_pipeline["notify"].assert_not_called()
 
     def test_status_reflects_finished_job(self, mock_pipeline):
-        rid = client.post("/compose/transform", json=PAYLOAD).json()["request_id"]
+        rid = client.post("/compose/transform", json=PAYLOAD).json()["external_job_id"]
 
         resp = client.get(f"/compose/status/{rid}")
         assert resp.status_code == 200
@@ -72,19 +72,24 @@ class TestPostTransform:
         assert body["steps"]["artifacts"] == "SUCCESS"
         assert body["steps"]["download"] == "SUCCESS"
         assert body["steps"]["qsub"] == "SUCCESS"
+        # no callback_url was given
+        assert body["callback"] == {"requested": False, "status": "NOT_REQUESTED", "info": None}
 
-    def test_callbacks_sent_with_tracked_task_ids(self, mock_pipeline):
+    def test_callback_sent_with_tracked_task_id(self, mock_pipeline):
         url = compose.ALLOWED_CALLBACK_URLs[0]
         resp = client.post("/compose/transform", json={**PAYLOAD, "CallbackUrl": url})
         assert resp.status_code == 200
-        rid = resp.json()["request_id"]
+        rid = resp.json()["external_job_id"]
 
         calls = mock_pipeline["notify"].call_args_list
-        # start callback from the API, then the final one from the (eager) watcher
-        assert [c.kwargs["task_id"] for c in calls] == [f"{rid}:callback-start", f"{rid}:callback-final"]
+        # only the final callback, fired by the (eager) watcher when the job finishes
+        assert [c.kwargs["task_id"] for c in calls] == [f"{rid}:callback-final"]
         assert calls[0].kwargs["args"][1] == url
-        assert calls[0].kwargs["args"][0]["status"] == "PENDING"
-        assert calls[1].kwargs["args"][0]["status"] == "SUCCESS"
+        assert calls[0].kwargs["args"][0]["status"] == "SUCCESS"
+
+        # notify_callback is mocked, so the status still shows the WAITING marker from submit time
+        callback = client.get(f"/compose/status/{rid}").json()["callback"]
+        assert callback == {"requested": True, "status": "WAITING", "info": None}
 
     def test_callback_url_not_allowed_is_rejected(self, mock_pipeline):
         resp = client.post("/compose/transform", json={**PAYLOAD, "CallbackUrl": "https://evil.example/cb"})
