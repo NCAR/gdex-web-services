@@ -544,6 +544,26 @@ def check_data(path: str, background_tasks: BackgroundTasks, callback_url: str |
     (SUCCESS, FAILURE or SKIPPED), result, error and details. A step runs only
     if every earlier step returned True, so data_size is skipped when any file
     is unreadable; check_readable's details list the directories holding them.
+
+    Flow (see app/tasks/portal_tasks.py for each task's output):
+      1. This endpoint returns {"external_job_id": "<id>", "status": "SUBMITTED", "result": null}.
+      2. After the response is sent, the chain is queued and the worker runs
+         validate_path_task -> check_readable_task -> data_size_task.
+      3. The final report is POSTed to callback_url (if given) and returned by
+         GET /celery/task-status/<external_job_id>.
+
+    Final result, everything readable:
+      {"external_job_id": "<id>", "status": "SUCCESS", "result": {"path": "<path>", "tasks": {
+        "validate_path":  {"status": "SUCCESS", "result": true, "error": null, "details": {"is_directory": true}},
+        "check_readable": {"status": "SUCCESS", "result": true, "error": null, "details": {"file_count": 2,
+                           "unreadable_file_count": 0, "unreadable_directories": [], "unscanned_directories": []}},
+        "data_size":      {"status": "SUCCESS", "result": 8, "error": null, "details": null}}}}
+
+    Some files unreadable: status stays SUCCESS, check_readable has "result": false
+    with the directories and counts in details, and data_size is SKIPPED.
+
+    A step failed (e.g. the path doesn't exist): status is FAILURE, that step has
+    "status": "FAILURE" with the message in "error", and later steps are SKIPPED.
     """
     workflow = chain(validate_path_task.s(path), check_readable_task.s(), data_size_task.s())
     return submit_portal_task(workflow, callback_url, background_tasks)
