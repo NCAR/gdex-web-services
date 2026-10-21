@@ -8,7 +8,8 @@ How a portal job works, start to finish:
   2. After that response is sent, the job is queued in Redis and a Celery worker
      runs it. A job is one task, or a chain of tasks run one after another.
   3. When the job finishes, the result is POSTed to the caller's callback URL (if
-     one was given) and can also be fetched from GET /celery/task-status/<id>.
+     one was given) and can also be fetched from GET /celery/task-status/<id>
+     (defined in app/routers/celery.py; see section 1).
 
 This file is laid out in that order:
 
@@ -32,6 +33,14 @@ import stat
 #
 # Every API response and callback for a portal job has the same three
 # fields: external_job_id, status and result.
+#
+# Checking a job's status: GET /celery/task-status/<external_job_id>,
+# defined in app/routers/celery.py (task_status). It isn't a Celery task:
+# it reads the job's record (celery-task-meta-<id> in Redis DB 1) directly
+# in the API request and returns it with the two helpers below:
+#   {"external_job_id": "<id>", "status": "PENDING" | "STARTED" | "SUCCESS"
+#    | "FAILURE", "result": null until the job finishes}
+# An unknown or expired id returns PENDING.
 #####################################################################
 
 
