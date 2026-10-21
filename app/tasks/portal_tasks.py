@@ -11,62 +11,53 @@ import stat
 #####################################
 
 
-def job_response(task_id, status, result=None, portal_task_id=None):
+def job_response(task_id, status, result=None):
   """Fields returned for every portal task, in API responses and callback payloads.
 
-  result holds the task's return value on success, or the error message on failure.
+  result holds the task's return value (for a chain, a step report: see _run_step),
+  or the error message if the task crashed outside a step.
   """
-  return {"external_job_id": task_id, "id": portal_task_id, "status": status, "result": result}
+  return {"external_job_id": task_id, "status": status, "result": result}
 
 
-def _portal_task_key(task_id):
-  return f"portal-task-id-{task_id}"
+def job_status(celery_status, result):
+  """The status to report: FAILURE if any step in a step report failed, else Celery's status.
 
-
-def save_portal_task_id(task_id, portal_task_id):
-  """Record the portal's UUID in the result backend (Redis DB 1), next to celery-task-meta-<task_id>.
-
-  Kept as its own key rather than a task stamp: a failed chain writes the final task's
-  FAILURE record without stamps. Expires along with the task result (result_expires).
+  Steps record their own failures rather than raising (see _run_step), so Celery
+  marks the chain SUCCESS even when a step failed.
   """
-  celery_app.backend.set(_portal_task_key(task_id), str(portal_task_id))
+  steps = result.get("tasks", {}).values() if isinstance(result, dict) else []
+  return "FAILURE" if any(s["status"] == "FAILURE" for s in steps) else celery_status
 
 
-def get_portal_task_id(task_id):
-  value = celery_app.backend.get(_portal_task_key(task_id))
-  return value.decode() if isinstance(value, bytes) else value
-
-
-def submit_portal_task(sig, callback_url=None, portal_task_id=None, background_tasks=None):
-  """Queue a portal task or chain, with an optional callback URL and portal UUID.
+def submit_portal_task(sig, callback_url=None, background_tasks=None):
+  """Queue a portal task or chain, with an optional callback URL.
 
   Pass the endpoint's FastAPI BackgroundTasks to queue the task only after the
   response (with its ids) has been sent, so no task runs before the client has
   its id. Without it, the task is queued immediately.
   """
-  # freeze() assigns the task ids now, so the UUID is saved before any task can finish
+  # freeze() assigns the task ids now, so they can go in the response and callbacks
   task_id = sig.freeze().id
-  if portal_task_id:
-      save_portal_task_id(task_id, portal_task_id)
   if callback_url:
-      sig.link(notify_callback_success.s(callback_url, task_id, portal_task_id))
-      sig.link_error(notify_callback_failure.s(callback_url, task_id, portal_task_id))
+      sig.link(notify_callback_success.s(callback_url, task_id))
+      sig.link_error(notify_callback_failure.s(callback_url, task_id))
   if background_tasks is not None:
       background_tasks.add_task(sig.apply_async)
   else:
       sig.apply_async()
-  return job_response(task_id, "SUBMITTED", portal_task_id=portal_task_id)
+  return job_response(task_id, "SUBMITTED")
 
 
 @celery_app.task
-def notify_callback_success(result, callback_url, task_id, portal_task_id=None):
-  post_to_callback_url(callback_url, job_response(task_id, "SUCCESS", result, portal_task_id))
+def notify_callback_success(result, callback_url, task_id):
+  post_to_callback_url(callback_url, job_response(task_id, job_status("SUCCESS", result), result))
 
 
 @celery_app.task
-def notify_callback_failure(request, exc, traceback, callback_url, task_id, portal_task_id=None):
+def notify_callback_failure(request, exc, traceback, callback_url, task_id):
   # Celery calls errbacks with (request, exc, traceback) ahead of the signature's own args
-  post_to_callback_url(callback_url, job_response(task_id, "FAILURE", str(exc), portal_task_id))
+  post_to_callback_url(callback_url, job_response(task_id, "FAILURE", str(exc)))
 
 
 #####################################
@@ -82,17 +73,44 @@ def test_task():
 ######## /router/files Tasks ########
 #####################################
 
-@celery_app.task
-def validate_path_task(path):
-  is_url = path.startswith("http://") or path.startswith("https://")
-  if is_url:
-      # Raising marks the task FAILURE; Celery propagates it down the rest of the chain
-      raise ValueError(f"The provided endpoint is a URL, but this function only supports endpoint paths on /glade: {path}")
+CHECK_DATA_STEPS = ("validate_path", "check_readable", "data_size")
 
+
+def _step_entry(status, result=None, error=None, details=None):
+  return {"status": status, "result": result, "error": error, "details": details}
+
+
+def _new_report(path, steps):
+  """Start a step report with every step SKIPPED, so the shape is complete however far the chain gets."""
+  return {"path": path, "tasks": {name: _step_entry("SKIPPED") for name in steps}}
+
+
+def _run_step(report, name, step):
+  """Run one step of a chain and record its outcome under report["tasks"][name].
+
+  The step only runs if every earlier step succeeded with result True; otherwise
+  it stays SKIPPED. step(path, report) returns (result, details). An exception
+  is recorded as FAILURE with its message rather than raised, so later steps
+  still run (and skip) and the chain always finishes with a complete report.
+  """
+  tasks = report["tasks"]
+  earlier = list(tasks)[:list(tasks).index(name)]
+  if all(tasks[n]["status"] == "SUCCESS" and tasks[n]["result"] is True for n in earlier):
+      try:
+          result, details = step(report["path"], report)
+          tasks[name] = _step_entry("SUCCESS", result, details=details)
+      except Exception as e:
+          tasks[name] = _step_entry("FAILURE", error=str(e))
+  return report
+
+
+def _validate_path(path, report):
+  if path.startswith("http://") or path.startswith("https://"):
+      raise ValueError(f"The provided endpoint is a URL, but this function only supports endpoint paths on /glade: {path}")
   p = Path(path)
   if not p.exists():
       raise FileNotFoundError(f"Path does not exist: {path}")
-  return {"path": path, "is_directory": p.is_dir()}
+  return True, {"is_directory": p.is_dir()}
 
 
 def _others_can_reach(path):
@@ -105,8 +123,7 @@ def _others_can_list(mode):
   return bool(mode & stat.S_IROTH and mode & stat.S_IXOTH)
 
 
-@celery_app.task
-def check_readable_task(check_result):
+def _check_readable(path, report):
   """Check that every file under the path is readable by other users.
 
   A file counts as unreadable if it lacks o+r, or if any directory above it
@@ -114,14 +131,13 @@ def check_readable_task(check_result):
   by the directory that holds them. Directories the worker itself can't list
   are reported in unscanned_directories, since their files can't be checked.
   """
-  path = check_result["path"]
   p = Path(path)
   reachable = _others_can_reach(p)
   unreadable = {}  # directory -> number of unreadable files in it
   unscanned = []
   file_count = 0
 
-  if check_result["is_directory"]:
+  if report["tasks"]["validate_path"]["details"]["is_directory"]:
       dir_ok = {}  # directory -> whether others can get into it
       for dirpath, _dirnames, filenames in os.walk(p, followlinks=False, onerror=lambda e: unscanned.append(e.filename)):
           ok = dir_ok.get(os.path.dirname(dirpath), reachable) and _others_can_list(os.stat(dirpath).st_mode)
@@ -139,9 +155,7 @@ def check_readable_task(check_result):
       if not (reachable and p.stat().st_mode & stat.S_IROTH):
           unreadable[str(p.parent)] = 1
 
-  return {
-      **check_result,
-      "globally_readable": not unreadable and not unscanned,
+  return not unreadable and not unscanned, {
       "file_count": file_count,
       "unreadable_file_count": sum(unreadable.values()),
       "unreadable_directories": [{"directory": d, "unreadable_files": n} for d, n in sorted(unreadable.items())],
@@ -149,15 +163,11 @@ def check_readable_task(check_result):
   }
 
 
-@celery_app.task
-def compute_size_task(check_result):
-  """Total the path's size in bytes, only once check_readable_task found it all readable."""
-  if not check_result["globally_readable"]:
-      return {**check_result, "size_bytes": None}
-
-  p = Path(check_result["path"])
-  if not check_result["is_directory"]:
-      return {**check_result, "size_bytes": p.stat().st_size}
+def _data_size(path, report):
+  """Total the path's size in bytes."""
+  p = Path(path)
+  if not report["tasks"]["validate_path"]["details"]["is_directory"]:
+      return p.stat().st_size, None
 
   total = 0
   for dirpath, _dirnames, filenames in os.walk(p, followlinks=False):
@@ -166,4 +176,19 @@ def compute_size_task(check_result):
               total += os.stat(os.path.join(dirpath, fname)).st_size
           except OSError:
               continue
-  return {**check_result, "size_bytes": total}
+  return total, None
+
+
+@celery_app.task
+def validate_path_task(path):
+  return _run_step(_new_report(path, CHECK_DATA_STEPS), "validate_path", _validate_path)
+
+
+@celery_app.task
+def check_readable_task(report):
+  return _run_step(report, "check_readable", _check_readable)
+
+
+@celery_app.task
+def data_size_task(report):
+  return _run_step(report, "data_size", _data_size)
