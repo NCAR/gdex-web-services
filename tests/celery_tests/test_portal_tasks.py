@@ -1,9 +1,12 @@
+import asyncio
 import time
 from unittest.mock import patch
 
 import pytest
 from celery.contrib.testing.worker import start_worker
 from celery.result import AsyncResult
+from celery import Signature
+from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
 
 from app.celery_app import celery_app
@@ -87,6 +90,16 @@ class TestSubmit:
 
         assert body["id"] is None
         assert _status(body["external_job_id"])["id"] is None
+
+    def test_task_is_queued_only_after_the_response(self):
+        background_tasks = BackgroundTasks()
+        with patch.object(Signature, "apply_async") as apply_async:
+            body = portal_tasks.submit_portal_task(portal_tasks.test_task.s(), portal_task_id=PORTAL_ID, background_tasks=background_tasks)
+
+            assert body["status"] == "SUBMITTED"
+            apply_async.assert_not_called()
+            asyncio.run(background_tasks())  # what FastAPI does once the response is sent
+            apply_async.assert_called_once()
 
     def test_invalid_portal_id_is_rejected(self):
         resp = client.get("/celery/test-celery", params={"portal_task_id": "not-a-uuid"})

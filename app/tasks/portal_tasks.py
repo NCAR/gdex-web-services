@@ -37,8 +37,13 @@ def get_portal_task_id(task_id):
   return value.decode() if isinstance(value, bytes) else value
 
 
-def submit_portal_task(sig, callback_url=None, portal_task_id=None):
-  """Queue a portal task or chain, with an optional callback URL and portal UUID."""
+def submit_portal_task(sig, callback_url=None, portal_task_id=None, background_tasks=None):
+  """Queue a portal task or chain, with an optional callback URL and portal UUID.
+
+  Pass the endpoint's FastAPI BackgroundTasks to queue the task only after the
+  response (with its ids) has been sent, so no task runs before the client has
+  its id. Without it, the task is queued immediately.
+  """
   # freeze() assigns the task ids now, so the UUID is saved before any task can finish
   task_id = sig.freeze().id
   if portal_task_id:
@@ -46,7 +51,10 @@ def submit_portal_task(sig, callback_url=None, portal_task_id=None):
   if callback_url:
       sig.link(notify_callback_success.s(callback_url, task_id, portal_task_id))
       sig.link_error(notify_callback_failure.s(callback_url, task_id, portal_task_id))
-  sig.apply_async()
+  if background_tasks is not None:
+      background_tasks.add_task(sig.apply_async)
+  else:
+      sig.apply_async()
   return job_response(task_id, "SUBMITTED", portal_task_id=portal_task_id)
 
 

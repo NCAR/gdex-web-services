@@ -532,16 +532,17 @@ async def check_access(
 ##############################################################
 
 from celery import chain
+from fastapi import BackgroundTasks
 from uuid import UUID
 from app.tasks.portal_tasks import validate_path_task, check_readable_task, compute_size_task, submit_portal_task
 
 
 @router.get("/check-data")
-def check_data(path: str, callback_url: str | None = None, portal_task_id: UUID | None = None):
+def check_data(path: str, background_tasks: BackgroundTasks, callback_url: str | None = None, portal_task_id: UUID | None = None):
     """Queue a check of a /glade path: whether other users can read it, then its size.
 
     The size is only computed (and size_bytes only set) when every file is
     readable; otherwise the result lists the directories holding unreadable files.
     """
     workflow = chain(validate_path_task.s(path), check_readable_task.s(), compute_size_task.s())
-    return submit_portal_task(workflow, callback_url, portal_task_id and str(portal_task_id))
+    return submit_portal_task(workflow, callback_url, portal_task_id and str(portal_task_id), background_tasks)
