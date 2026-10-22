@@ -27,10 +27,18 @@ Adding a new portal endpoint (see check_data.py as the example):
      starts the report with common.new_report.
   3. Add submit_<endpoint>(...), which chains the tasks and calls
      common.submit_portal_task. The router calls only this function.
-  4. Add the module to `include` in app/celery_app.py, or the worker won't
-     register its tasks.
+
+No change to app/celery_app.py is needed: its include lists this package, and
+the import below loads every module in this folder, so the worker registers
+the new module's tasks automatically.
 
 Celery names each task by its module path (e.g.
 app.tasks.portal.check_data.validate_path_task). Moving or renaming a task
 changes that name, so do it between deploys, not while jobs are queued.
 """
+import importlib
+import pkgutil
+
+# Import every module in this package so Celery registers their tasks
+for _module in pkgutil.iter_modules(__path__):
+  importlib.import_module(f"{__name__}.{_module.name}")
