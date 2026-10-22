@@ -129,7 +129,7 @@ async def _read_url_header(url: str) -> bytes:
         return resp.content[:8]
 
 
-# Zarr stores are directories/prefixes, not single files with a header, so
+# Zarr stores are directories/prefixes, not single files with a header,so
 # they're identified by a top-level metadata file rather than magic bytes:
 # "zarr.json" for v3, or the legacy ".zgroup"/".zarray" for v2.
 _ZARR_V3_MARKER = "zarr.json"
@@ -175,7 +175,7 @@ async def _detect_zarr_url(url: str) -> str | None:
 
 @router.get("/is-netcdf")
 async def is_netcdf(path: str = Query(..., openapi_examples=_EXAMPLE_NETCDF_OPENAPI_EXAMPLES)):
-    """Check whether a local file path or URL points to a NetCDF file."""
+    """Check whether a local file path or URL points to a NetCDF file"""
     is_url = path.startswith("http://") or path.startswith("https://")
 
     try:
@@ -525,3 +525,43 @@ async def check_access(
 
     ok, reason = await asyncio.to_thread(_check_globally_readable, p)
     return {"path": path, "recursive": False, "globally_readable": ok, "reason": reason}
+
+
+##############################################################
+###################### CELERY ENDPOINTS ######################
+##############################################################
+
+from fastapi import BackgroundTasks
+from app.tasks.portal.check_data import submit_check_data
+
+
+@router.get("/check-data")
+def check_data(path: str, background_tasks: BackgroundTasks, callback_url: str | None = None):
+    """Queue a check of a /glade path: validate_path, then check_readable, then data_size.
+
+    The result reports each step under result.tasks.<name> with its status
+    (SUCCESS, FAILURE or SKIPPED), result, error and details. A step runs only
+    if every earlier step returned True, so data_size is skipped when any file
+    is unreadable; check_readable's details list the directories holding them.
+
+    Flow (see app/tasks/portal/check_data.py for each task's output):
+      1. This endpoint returns {"external_job_id": "<id>", "status": "SUBMITTED", "result": null}.
+      2. After the response is sent, the chain is queued and the worker runs
+         validate_path_task -> check_readable_task -> data_size_task.
+      3. The final report is POSTed to callback_url (if given) and returned by
+         GET /celery/task-status/<external_job_id>.
+
+    Final result, everything readable:
+      {"external_job_id": "<id>", "status": "SUCCESS", "result": {"path": "<path>", "tasks": {
+        "validate_path":  {"status": "SUCCESS", "result": true, "error": null, "details": {"is_directory": true}},
+        "check_readable": {"status": "SUCCESS", "result": true, "error": null, "details": {"file_count": 2,
+                           "unreadable_file_count": 0, "unreadable_directories": [], "unscanned_directories": []}},
+        "data_size":      {"status": "SUCCESS", "result": 8, "error": null, "details": null}}}}
+
+    Some files unreadable: status stays SUCCESS, check_readable has "result": false
+    with the directories and counts in details, and data_size is SKIPPED.
+
+    A step failed (e.g. the path doesn't exist): status is FAILURE, that step has
+    "status": "FAILURE" with the message in "error", and later steps are SKIPPED.
+    """
+    return submit_check_data(path, callback_url, background_tasks)

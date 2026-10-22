@@ -15,7 +15,8 @@ celery_app = Celery(
     "gdex_web_services",
     broker=broker_url,
     backend=result_backend,
-    include=["app.tasks.transform_tasks"],
+    # app.tasks.portal loads every module in its folder (see its __init__.py)
+    include=["app.tasks.transform_tasks", "app.tasks.portal"],
 )
 
 celery_app.conf.update(
