@@ -19,6 +19,7 @@ from app.celery_app import celery_app
 from app.tasks.callback_task import CallbackError
 from app.tasks.transform_tasks import celery_transform, STEP_NAMES
 from app.utils import get_dscheck_json, relpath_validate
+from app.utils.callback import ALLOWED_CALLBACK_URLs
 
 # Import RDA/GDEX libraries (rda-python-common) for database interaction and logging.
 try:
@@ -39,8 +40,7 @@ logger = logging.getLogger(__name__)
 # set up global constants
 WORKDIR = str(Path('/glade/campaign/collections/gdex/data/exchange/Web-services/'))
 
-# set up callback URL for safety checks
-ALLOWED_CALLBACK_URLs = ["https://gdex.ucar.edu/api/gdex-services-event/"]
+
 
 
 # `{cindex:int}` only matches all-digit paths, so a UUID falls through to

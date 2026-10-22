@@ -17,7 +17,7 @@ client = TestClient(app)
 
 CALLBACK = "https://portal/cb"
 SECRET = "test-callback-secret"
-SECRET_HEADERS = {"X-GDEX-Services-Secret": SECRET}
+SECRET_HEADERS = {"Content-Type": "application/json", "X-GDEX-Services-Secret": SECRET}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -33,7 +33,7 @@ def worker():
 @pytest.fixture
 def callback_post(monkeypatch):
     monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", SECRET)
-    with patch("app.utils.callback.requests.post") as post:
+    with patch("app.utils.callback.httpx.post") as post:
         yield post
 
 
@@ -232,7 +232,7 @@ class TestCallbacks:
 
         callback_post.assert_called_once_with(CALLBACK, json={
             "external_job_id": job_id, "status": "SUCCESS", "result": "Yo, Celery is working!",
-        }, headers=SECRET_HEADERS)
+        }, headers=SECRET_HEADERS, timeout=10)
 
     def test_chain_success_posts_once(self, callback_post, data_dir):
         job_id = client.get("/files/check-data", params={"path": str(data_dir), "callback_url": CALLBACK}).json()["external_job_id"]
@@ -259,7 +259,7 @@ class TestCallbacks:
                     "data_size": _step("SKIPPED"),
                 },
             },
-        }, headers=SECRET_HEADERS)
+        }, headers=SECRET_HEADERS, timeout=10)
 
     def test_no_callback_url_posts_nothing(self, callback_post, data_dir):
         job_id = client.get("/files/check-data", params={"path": str(data_dir)}).json()["external_job_id"]

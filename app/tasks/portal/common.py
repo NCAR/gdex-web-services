@@ -7,8 +7,9 @@ This file is laid out in the order a job uses it:
   3. Callbacks           telling the caller the job is done
   4. Step reports        how a chain of steps records each step's outcome
 """
+import httpx
 from app.celery_app import celery_app
-from app.utils.callback import post_to_callback_url
+from app.utils.callback import callback_to_portal
 
 
 #####################################################################
@@ -90,6 +91,21 @@ def submit_portal_task(sig, callback_url=None, background_tasks=None):
 #####################################################################
 
 
+def _send_callback(callback_url, payload):
+  """POST payload to callback_url; a portal rejection (4xx/5xx) is printed to the worker log, not raised.
+
+  Nothing is retried. A portal that can't be reached at all still raises httpx.HTTPError.
+  """
+  try:
+    callback_to_portal(callback_url, payload)
+  except httpx.HTTPStatusError as e:
+    try:
+      reason = e.response.json().get("message", e.response.text)
+    except (ValueError, AttributeError):
+      reason = e.response.text[:500]
+    print(f"Callback to {callback_url} failed with status code {e.response.status_code}: {reason}")
+
+
 @celery_app.task
 def notify_callback_success(result, callback_url, task_id):
   """POST the finished job to callback_url once the last task returns.
@@ -99,7 +115,7 @@ def notify_callback_success(result, callback_url, task_id):
 
   Posts: {"external_job_id": task_id, "status": "SUCCESS" | "FAILURE", "result": <step report>}
   """
-  post_to_callback_url(callback_url, job_response(task_id, job_status("SUCCESS", result), result))
+  _send_callback(callback_url, job_response(task_id, job_status("SUCCESS", result), result))
 
 
 @celery_app.task
@@ -112,7 +128,7 @@ def notify_callback_failure(request, exc, traceback, callback_url, task_id):
   Posts: {"external_job_id": task_id, "status": "FAILURE", "result": "<error message>"}
   """
   # Celery calls errbacks with (request, exc, traceback) ahead of the signature's own args
-  post_to_callback_url(callback_url, job_response(task_id, "FAILURE", str(exc)))
+  _send_callback(callback_url, job_response(task_id, "FAILURE", str(exc)))
 
 
 #####################################################################
