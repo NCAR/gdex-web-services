@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import FastAPI
-from app.routers import datasets, files, generators, compose
+from app.routers import datasets, files, generators, compose, celery
 
 # Uvicorn only configures its own loggers; send app loggers (e.g. app.routers.compose)
 # to stdout at INFO so they show up in `kubectl logs`.
@@ -17,6 +17,7 @@ app.include_router(datasets.router)
 app.include_router(files.router)
 app.include_router(generators.router)
 app.include_router(compose.router)
+app.include_router(celery.router)
 
 
 @app.get("/")
