@@ -23,6 +23,7 @@ This file is laid out in that order:
 """
 from app.celery_app import celery_app
 from app.utils.callback import post_to_callback_url
+from celery import chain
 from pathlib import Path
 import os
 import stat
@@ -305,6 +306,8 @@ def _data_size(path, report):
 #   validate_path_task -> check_readable_task -> data_size_task
 # Each task passes the same step report to the next and fills in its own
 # entry. The last task's return value is the job's result.
+#
+# submit_check_data (at the end of this section) builds and queues the chain.
 #####################################################################
 
 
@@ -349,6 +352,21 @@ def data_size_task(report):
   Skipped (an earlier step failed or returned False): "data_size": {"status": "SKIPPED", ...all null}
   """
   return _run_step(report, "data_size", _data_size)
+
+
+def submit_check_data(path, callback_url=None, background_tasks=None):
+  """Queue the check-data chain for path; called by GET /files/check-data.
+
+  Builds validate_path_task -> check_readable_task -> data_size_task here, so
+  the router doesn't need to know about Celery or the steps (the same split as
+  transform_tasks.celery_transform). See submit_portal_task for callback_url and
+  background_tasks.
+
+  Returns (before any task runs):
+    {"external_job_id": "<id>", "status": "SUBMITTED", "result": null}
+  """
+  workflow = chain(validate_path_task.s(path), check_readable_task.s(), data_size_task.s())
+  return submit_portal_task(workflow, callback_url, background_tasks)
 
 
 #####################################################################

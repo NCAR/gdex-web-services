@@ -531,9 +531,8 @@ async def check_access(
 ###################### CELERY ENDPOINTS ######################
 ##############################################################
 
-from celery import chain
 from fastapi import BackgroundTasks
-from app.tasks.portal_tasks import validate_path_task, check_readable_task, data_size_task, submit_portal_task
+from app.tasks.portal_tasks import submit_check_data
 
 
 @router.get("/check-data")
@@ -565,5 +564,4 @@ def check_data(path: str, background_tasks: BackgroundTasks, callback_url: str |
     A step failed (e.g. the path doesn't exist): status is FAILURE, that step has
     "status": "FAILURE" with the message in "error", and later steps are SKIPPED.
     """
-    workflow = chain(validate_path_task.s(path), check_readable_task.s(), data_size_task.s())
-    return submit_portal_task(workflow, callback_url, background_tasks)
+    return submit_check_data(path, callback_url, background_tasks)
