@@ -15,8 +15,8 @@ celery_app = Celery(
     "gdex_web_services",
     broker=broker_url,
     backend=result_backend,
+    include=["app.tasks.transform_tasks", "app.tasks.callback_task", "app.tasks.portal"]
     # app.tasks.portal loads every module in its folder (see its __init__.py)
-    include=["app.tasks.transform_tasks", "app.tasks.portal"],
 )
 
 celery_app.conf.update(
@@ -27,6 +27,16 @@ celery_app.conf.update(
     result_extended=True,
     # Redeliver a task if the worker dies mid-execution, instead of losing it.
     task_acks_late=True,
+    # Retry a failed publish (Redis blip) before apply_async raises. Celery's default is
+    # 3 tries over ~0.6s; this is ~7s, still short enough for the API request to wait on.
+    # A republish reuses the same task_id, so a rare duplicate message is harmless.
+    task_publish_retry=True,
+    task_publish_retry_policy={
+        "max_retries": 6,
+        "interval_start": 0.2,
+        "interval_step": 0.4,
+        "interval_max": 2,
+    },
     worker_prefetch_multiplier=1,
     # Scheduled retries / watch_job polls (countdown=...) live in Redis, so
     # Redis must run with persistence (appendonly) enabled.

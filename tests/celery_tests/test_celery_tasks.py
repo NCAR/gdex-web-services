@@ -5,7 +5,8 @@ import pytest
 from celery.result import AsyncResult
 
 from app.celery_app import celery_app
-from app.tasks import transform_tasks
+from app.tasks import callback_task, transform_tasks
+from app.tasks.callback_task import CallbackError
 from gdexws.utils.logging import log_format
 
 REQUEST_DICT = {
@@ -42,12 +43,12 @@ def _pbs_line(message, level="INFO", **kwargs):
 class TestMapJsonlToCeleryState:
     def test_info_line_is_progress(self):
         entry = log_format("transform", "INFO", "Processing file 1 of 2")
-        assert transform_tasks.jsonl_to_celery_state(entry) == "PROGRESS"
+        assert transform_tasks.jsonl_to_celery_state(entry) == "PBS_PROGRESS"
 
     def test_debug_and_warning_lines_are_progress(self):
         for level in ("DEBUG", "WARNING"):
             entry = log_format("add_global_meta", level, "msg")
-            assert transform_tasks.jsonl_to_celery_state(entry) == "PROGRESS"
+            assert transform_tasks.jsonl_to_celery_state(entry) == "PBS_PROGRESS"
 
     def test_error_line_is_failure_reported(self):
         entry = log_format("add_global_meta", "ERROR", "File not found", file="x.nc")
@@ -138,31 +139,37 @@ class TestWaitForScriptAndSubmitQsub:
 
 
 class TestWatchJob:
-    @pytest.mark.parametrize("message,level,job_status", [
-        ("PBS job completed", "INFO", "completed"),
-        ("PBS job failed", "ERROR", "failed"),
+    @pytest.mark.parametrize("message,level,state", [
+        ("PBS job completed", "INFO", "SUCCESS"),
+        ("PBS job failed", "ERROR", "PBS_FAILURE_REPORTED"),
     ])
-    def test_terminal_line_succeeds_with_job_status(self, workdir, message, level, job_status):
-        _write_jsonl(workdir / "rid-1.gdexws.jsonl", [_pbs_line("PBS job started"), _pbs_line(message, level)])
-        with patch.object(transform_tasks.notify_callback, "delay") as notify:
-            result = transform_tasks.watch_job.apply(args=["rid-1"], task_id="rid-1")
+    def test_terminal_line_sets_state(self, workdir, message, level, state):
+        # unique id per case: the in-memory backend persists across tests and Celery never
+        # overwrites a stored SUCCESS, so a shared id would hide the second case's state
+        rid = f"rid-{state}"
+        _write_jsonl(workdir / f"{rid}.gdexws.jsonl", [_pbs_line("PBS job started"), _pbs_line(message, level)])
+        with patch.object(transform_tasks.notify_callback, "apply_async") as notify:
+            transform_tasks.watch_job.apply(args=[rid], task_id=rid)
 
-        # A failed PBS job is still Celery SUCCESS — the outcome is in the result
-        assert result.state == "SUCCESS"
-        assert result.result["job_status"] == job_status
-        assert result.result["request_id"] == "rid-1"
-        assert result.result["process_message"] == message
+        # A failed PBS job is PBS_FAILURE_REPORTED (FAILURE is reserved for worker errors);
+        # the task ends with Ignore, so the state/meta from update_state are what is stored
+        status = AsyncResult(rid, app=celery_app)
+        assert status.state == state
+        assert str(workdir / f"{rid}.gdexws.jsonl") in status.info["msg"]
         notify.assert_not_called()
 
     def test_terminal_line_fires_callback_when_provided(self, workdir):
         _write_jsonl(workdir / "rid-2.gdexws.jsonl", [_pbs_line("PBS job completed")])
-        with patch.object(transform_tasks.notify_callback, "delay") as notify:
+        with patch.object(transform_tasks.notify_callback, "apply_async") as notify:
             transform_tasks.watch_job.apply(args=["rid-2", "https://portal/cb"], task_id="rid-2")
 
         notify.assert_called_once()
-        payload, url = notify.call_args.args
+        assert notify.call_args.kwargs["task_id"] == "rid-2:callback-final"
+        payload, url = notify.call_args.kwargs["args"]
         assert url == "https://portal/cb"
-        assert payload["job_status"] == "completed"
+        assert payload["status"] == "SUCCESS"
+        assert payload["external_job_id"] == "rid-2"
+        assert payload["result"]["process_message"] == "PBS job completed"
 
     def test_in_progress_mirrors_latest_line_and_reschedules(self, workdir):
         entries = [_pbs_line("PBS job started"), log_format("add_global_meta", "INFO", "Added attribute")]
@@ -171,11 +178,11 @@ class TestWatchJob:
             transform_tasks.watch_job.apply(args=["rid-3", "https://portal/cb"], task_id="rid-3")
 
         status = AsyncResult("rid-3", app=celery_app)
-        assert status.state == "PROGRESS"
+        assert status.state == "PBS_PROGRESS"
         assert status.info["process_message"] == "Added attribute"
         reschedule.assert_called_once()
         kwargs = reschedule.call_args.kwargs
-        assert kwargs["args"] == ["rid-3", "https://portal/cb", 2]
+        assert kwargs["args"][:3] == ["rid-3", "https://portal/cb", 2]  # [3] is the heartbeat clock
         assert kwargs["task_id"] == "rid-3"
 
     def test_error_line_reports_failure_state(self, workdir):
@@ -191,23 +198,23 @@ class TestWatchJob:
             transform_tasks.watch_job.apply(args=["rid-5", None, 1], task_id="rid-5")
 
         # Line 0 (terminal) was already consumed in a previous poll, so not re-reported
-        assert AsyncResult("rid-5", app=celery_app).state == "PROGRESS"
-        assert reschedule.call_args.kwargs["args"] == ["rid-5", None, 2]
+        assert AsyncResult("rid-5", app=celery_app).state == "PBS_PROGRESS"
+        assert reschedule.call_args.kwargs["args"][:3] == ["rid-5", None, 2]
 
     def test_partial_trailing_line_is_left_for_next_poll(self, workdir):
         (workdir / "rid-6.gdexws.jsonl").write_text(json.dumps(_pbs_line("PBS job started")) + '\n{"command": "tra')
         with patch.object(transform_tasks.watch_job, "apply_async") as reschedule:
             transform_tasks.watch_job.apply(args=["rid-6"], task_id="rid-6")
 
-        assert AsyncResult("rid-6", app=celery_app).state == "PROGRESS"
-        assert reschedule.call_args.kwargs["args"] == ["rid-6", None, 1]
+        assert AsyncResult("rid-6", app=celery_app).state == "PBS_PROGRESS"
+        assert reschedule.call_args.kwargs["args"][:3] == ["rid-6", None, 1]
 
     def test_missing_log_reschedules_and_stays_pending(self, workdir):
         with patch.object(transform_tasks.watch_job, "apply_async") as reschedule:
             transform_tasks.watch_job.apply(args=["rid-7"], task_id="rid-7")
 
         assert AsyncResult("rid-7", app=celery_app).state == "PENDING"
-        assert reschedule.call_args.kwargs["args"] == ["rid-7", None, 0]
+        assert reschedule.call_args.kwargs["args"][:3] == ["rid-7", None, 0]
         assert reschedule.call_args.kwargs["countdown"] == transform_tasks.SEARCH_JSONL_INT
 
     def test_bad_json_is_watcher_failure(self, workdir):
@@ -216,20 +223,122 @@ class TestWatchJob:
         assert result.state == "FAILURE"
 
 
+class TestChainFailed:
+    def _fail(self, callback_url):
+        request = MagicMock(id="rid-f:download")
+        with patch.object(transform_tasks.notify_callback, "apply_async") as notify:
+            transform_tasks.chain_failed(request, ValueError("boom"), "tb", "rid-f", callback_url)
+        return notify
+
+    def test_marks_request_failed_and_notifies(self):
+        notify = self._fail("https://portal/cb")
+
+        status = AsyncResult("rid-f", app=celery_app)
+        assert status.state == "FAILURE"
+        assert "download" in str(status.info)
+        kwargs = notify.call_args.kwargs
+        assert kwargs["task_id"] == "rid-f:callback-final"
+        payload, url = kwargs["args"]
+        assert url == "https://portal/cb"
+        assert payload["status"] == "FAILURE"
+        assert payload["external_job_id"] == "rid-f"
+        assert payload["result"]["step"] == "download"
+
+    def test_no_callback_without_url(self):
+        notify = self._fail(None)
+        notify.assert_not_called()
+
+    def test_watcher_stops_after_chain_failure(self, workdir):
+        self._fail(None)
+        with patch.object(transform_tasks.watch_job, "apply_async") as reschedule:
+            transform_tasks.watch_job.apply(args=["rid-f"], task_id="rid-f")
+
+        reschedule.assert_not_called()
+        assert AsyncResult("rid-f", app=celery_app).state == "FAILURE"
+
+
+class TestCeleryTransformPublishOrder:
+    def test_watcher_published_before_chain(self):
+        order = []
+        fake_chain = MagicMock()
+        fake_chain.return_value.apply_async.side_effect = lambda **kw: order.append("chain")
+        with patch.object(transform_tasks, "chain", fake_chain), \
+             patch.object(transform_tasks.watch_job, "apply_async",
+                          side_effect=lambda **kw: order.append("watcher")):
+            transform_tasks.celery_transform(REQUEST_DICT, "rid-o", "chiaweih")
+
+        assert order == ["watcher", "chain"]
+
+    def test_chain_publish_failure_stops_the_watcher(self):
+        fake_chain = MagicMock()
+        fake_chain.return_value.apply_async.side_effect = RuntimeError("redis down")
+        with patch.object(transform_tasks, "chain", fake_chain), \
+             patch.object(transform_tasks.watch_job, "apply_async"):
+            with pytest.raises(RuntimeError, match="redis down"):
+                transform_tasks.celery_transform(REQUEST_DICT, "rid-p", "chiaweih")
+
+        assert AsyncResult("rid-p", app=celery_app).state == "FAILURE"
+
+
 class TestNotifyCallback:
-    def test_posts_result(self):
-        with patch.object(transform_tasks.httpx, "post") as post:
-            post.return_value = MagicMock(raise_for_status=MagicMock())
-            transform_tasks.notify_callback.apply(args=[{"job_status": "completed"}, "https://portal/cb"]).get()
+    def test_posts_result_with_secret_header(self, monkeypatch):
+        monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", "s3cret")
+        payload = {"external_job_id": "rid", "status": "SUCCESS"}
+        with patch.object(callback_task.httpx, "post") as post:
+            post.return_value = MagicMock(status_code=200, raise_for_status=MagicMock())
+            result = callback_task.notify_callback.apply(args=[payload, "https://portal/cb"])
 
-        post.assert_called_once_with("https://portal/cb", json={"job_status": "completed"}, timeout=10)
+        assert result.get() == {"http_status": 200}
+        post.assert_called_once_with(
+            "https://portal/cb",
+            json=payload,
+            headers={"Content-Type": "application/json", "X-GDEX-Services-Secret": "s3cret"},
+            timeout=10,
+        )
 
-    def test_retries_on_http_error(self):
-        with patch.object(transform_tasks.httpx, "post", side_effect=transform_tasks.httpx.ConnectError("down")) as post:
-            result = transform_tasks.notify_callback.apply(args=[{}, "https://portal/cb"])
+    @staticmethod
+    def _status_error(code):
+        request = callback_task.httpx.Request("POST", "https://portal/cb")
+        response = callback_task.httpx.Response(code, request=request)
+        return MagicMock(status_code=code, raise_for_status=MagicMock(
+            side_effect=callback_task.httpx.HTTPStatusError("err", request=request, response=response)))
+
+    @pytest.mark.parametrize("code", [400, 401, 403, 404])
+    def test_4xx_fails_fast_with_http_status(self, monkeypatch, code):
+        monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", "s3cret")
+        with patch.object(callback_task.httpx, "post", return_value=self._status_error(code)) as post:
+            result = callback_task.notify_callback.apply(args=[{}, "https://portal/cb"])
+
+        assert post.call_count == 1  # no retry
+        assert result.state == "FAILURE"
+        assert isinstance(result.result, CallbackError)
+        assert result.result.args == (f"Portal callback returned HTTP {code}", code)
+
+    @pytest.mark.parametrize("code", [408, 429, 500, 503])
+    def test_retryable_status_retries_then_fails_with_http_status(self, monkeypatch, code):
+        monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", "s3cret")
+        with patch.object(callback_task.httpx, "post", return_value=self._status_error(code)) as post:
+            result = callback_task.notify_callback.apply(args=[{}, "https://portal/cb"])
+
+        assert post.call_count == 1 + callback_task.notify_callback.max_retries
+        assert result.state == "FAILURE"
+        assert result.result.args[1] == code
+
+    def test_network_error_failure_has_no_http_status(self, monkeypatch):
+        monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", "s3cret")
+        with patch.object(callback_task.httpx, "post", side_effect=callback_task.httpx.ConnectError("down")):
+            result = callback_task.notify_callback.apply(args=[{}, "https://portal/cb"])
 
         assert result.state == "FAILURE"
-        assert post.call_count == 1 + transform_tasks.notify_callback.max_retries
+        assert result.result.args[1] is None
+
+    def test_retries_on_http_error(self, monkeypatch):
+        monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", "s3cret")
+        with patch.object(callback_task.httpx, "post", side_effect=callback_task.httpx.ConnectError("down")) as post:
+            result = callback_task.notify_callback.apply(args=[{}, "https://portal/cb"])
+
+        assert result.state == "FAILURE"
+        assert post.call_count == 1 + callback_task.notify_callback.max_retries
 
 
 class TestStartTransformPipeline:
@@ -239,4 +348,8 @@ class TestStartTransformPipeline:
             transform_tasks.celery_transform({**REQUEST_DICT, "CallbackUrl": "https://portal/cb"}, "rid", "chiaweih")
 
         chain.return_value.apply_async.assert_called_once()
+        errback = chain.return_value.apply_async.call_args.kwargs["link_error"]
+        assert errback.args == ("rid", "https://portal/cb")
+        step_ids = [sig.options["task_id"] for sig in chain.call_args.args]
+        assert step_ids == ["rid:artifacts", "rid:download", "rid:qsub"]
         watch.assert_called_once_with(args=["rid", "https://portal/cb"], task_id="rid")

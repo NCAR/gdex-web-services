@@ -35,6 +35,12 @@ webapp:
   # contain the keys access_key_id and secret_key.
   objectStore:
     secretName: boreas
+  # Existing secret (not managed by this chart) with the shared secret sent in
+  # the X-GDEX-Services-Secret header of portal callbacks. Only the Celery
+  # worker reads it (notify_callback runs there).
+  callbackSecret:
+    name: gdex-services-callback-secret
+    key: secret
   pgdb01Secret:
     existingSecret:
       name: pgdb0102-superuser  # reference existing secret named PGDB01
