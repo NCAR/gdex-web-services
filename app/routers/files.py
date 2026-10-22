@@ -550,9 +550,12 @@ def check_data(path: str, background_tasks: BackgroundTasks, callback_url: str |
          validate_path_task -> check_readable_task -> data_size_task.
       3. The final report is POSTed to callback_url (if given) and returned by
          GET /celery/task-status/<external_job_id>.
+      4. Each step's progress is logged (transform's JSONL format) to Boreas at
+         log_url: services_tmp/logs/check_data.<external_job_id>.jsonl.
 
     Final result, everything readable:
-      {"external_job_id": "<id>", "status": "SUCCESS", "result": {"path": "<path>", "tasks": {
+      {"external_job_id": "<id>", "status": "SUCCESS", "result": {"path": "<path>",
+       "log_url": "https://boreas.hpc.ucar.edu/gdex-data/services_tmp/logs/check_data.<id>.jsonl", "tasks": {
         "validate_path":  {"status": "SUCCESS", "result": true, "error": null, "details": {"is_directory": true}},
         "check_readable": {"status": "SUCCESS", "result": true, "error": null, "details": {"file_count": 2,
                            "unreadable_file_count": 0, "unreadable_directories": [], "unscanned_directories": []}},

@@ -9,6 +9,7 @@ This file is laid out in the order a job uses it:
 """
 from app.celery_app import celery_app
 from app.utils.callback import post_to_callback_url
+from app.utils.job_log import log_format, upload_job_log
 
 
 #####################################################################
@@ -122,7 +123,7 @@ def notify_callback_failure(request, exc, traceback, callback_url, task_id):
 # Each step fills in its own entry, so the final result shows what every
 # step did:
 #
-#   {"path": "<path>", "tasks": {
+#   {"path": "<path>", "log_url": "<Boreas URL of the job's log>", "tasks": {
 #      "<step name>": {"status": "SUCCESS" | "FAILURE" | "SKIPPED",
 #                      "result": ..., "error": ..., "details": ...},
 #      ...}}
@@ -130,6 +131,14 @@ def notify_callback_failure(request, exc, traceback, callback_url, task_id):
 # A step only runs if every step before it succeeded with result True.
 # Endpoint modules start a report with new_report and run each step with
 # run_step.
+#
+# Each step also adds lines to the job's log, in the same JSONL format as
+# the transform jobs (app/utils/job_log.py). While the chain runs, the lines
+# travel in report["_log"]. The last step uploads the log to Boreas at
+# services_tmp/logs/<endpoint>.<external_job_id>.jsonl, with "_" in place
+# of "-" in the endpoint name, e.g. check_data.<id>.jsonl for /check-data
+# (its own task id is the job's external_job_id), sets log_url and removes
+# "_log". Nothing is written to /glade.
 #####################################################################
 
 
@@ -143,18 +152,47 @@ def _step_entry(status, result=None, error=None, details=None):
   return {"status": status, "result": result, "error": error, "details": details}
 
 
-def new_report(path, steps):
+def new_report(path, steps, endpoint):
   """Start a step report with every step SKIPPED, so the shape is complete however far the chain gets.
 
-  steps is the endpoint's step names, in the order they run.
+  steps is the endpoint's step names, in the order they run. endpoint is the
+  name of the endpoint that started the job (e.g. "check-data"). It's the
+  command on the job's own log lines, starting with "<endpoint> job started",
+  and names the log file on Boreas (<endpoint with _ for ->.<id>.jsonl).
+  log_url stays None until the last step uploads the log.
 
   Returns:
-    {"path": path, "tasks": {"<step 1>": <SKIPPED entry>, "<step 2>": <SKIPPED entry>, ...}}
+    {"path": path, "log_url": null, "tasks": {"<step 1>": <SKIPPED entry>, ...},
+     "_log": {"command": endpoint, "lines": [<job started line>]}}
   """
-  return {"path": path, "tasks": {name: _step_entry("SKIPPED") for name in steps}}
+  return {
+      "path": path,
+      "log_url": None,
+      "tasks": {name: _step_entry("SKIPPED") for name in steps},
+      "_log": {"command": endpoint,
+               "lines": [log_format(endpoint, "INFO", f"{endpoint} job started", path=path)]},
+  }
 
 
-def run_step(report, name, step):
+def _log(report, command, level, message, **kwargs):
+  """Add one log_format line to the job's log."""
+  report["_log"]["lines"].append(log_format(command, level, message, **kwargs))
+
+
+def _save_log(report, job_id):
+  """Upload the job's log to Boreas, set log_url, and drop the lines from the report.
+
+  A failed upload is printed to the worker log rather than failing the job, and
+  log_url stays None.
+  """
+  log = report.pop("_log")
+  try:
+      report["log_url"] = upload_job_log(log["command"], job_id, log["lines"])
+  except Exception as e:
+      print(f"Could not upload the log for job {job_id} to Boreas: {e}")
+
+
+def run_step(report, name, step, job_id=None):
   """Run one step of a chain and record its outcome under report["tasks"][name].
 
   The step only runs if every earlier step succeeded with result True; otherwise
@@ -167,13 +205,39 @@ def run_step(report, name, step):
     Failure: {"status": "FAILURE", "result": null, "error": "<exception message>", "details": null}
     Skipped: {"status": "SKIPPED", "result": null, "error": null, "details": null}
   and returns the report.
+
+  Log lines added (command is the step name, except the job-level last line):
+    INFO    "<name> started", then one of
+    INFO    "<name> completed" (with result), or
+    WARNING "<name> completed with result False" (with details), or
+    ERROR   "<name> failed" (with error)
+    INFO    "<name> skipped" instead, if it didn't run
+    After the last step: INFO "<command> job completed", or ERROR "<command> job failed".
+  The last step then uploads the log, named after job_id (the job's external_job_id),
+  so the last step's task must pass its own task id as job_id.
   """
   tasks = report["tasks"]
-  earlier = list(tasks)[:list(tasks).index(name)]
-  if all(tasks[n]["status"] == "SUCCESS" and tasks[n]["result"] is True for n in earlier):
+  names = list(tasks)
+  if all(tasks[n]["status"] == "SUCCESS" and tasks[n]["result"] is True for n in names[:names.index(name)]):
+      _log(report, name, "INFO", f"{name} started")
       try:
           result, details = step(report["path"], report)
           tasks[name] = _step_entry("SUCCESS", result, details=details)
+          if result is False:
+              _log(report, name, "WARNING", f"{name} completed with result False", details=details)
+          else:
+              _log(report, name, "INFO", f"{name} completed", result=result)
       except Exception as e:
           tasks[name] = _step_entry("FAILURE", error=str(e))
+          _log(report, name, "ERROR", f"{name} failed", error=str(e))
+  else:
+      _log(report, name, "INFO", f"{name} skipped")
+
+  if name == names[-1]:
+      command = report["_log"]["command"]
+      if any(t["status"] == "FAILURE" for t in tasks.values()):
+          _log(report, command, "ERROR", f"{command} job failed")
+      else:
+          _log(report, command, "INFO", f"{command} job completed")
+      _save_log(report, job_id)
   return report

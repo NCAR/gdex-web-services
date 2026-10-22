@@ -139,16 +139,16 @@ def _data_size(path, report):
 
 @celery_app.task
 def validate_path_task(path):
-  """First task in the check-data chain: start the step report and run validate_path.
+  """First task in the check-data chain: start the step report and log, and run validate_path.
 
-  Success: {"path": path, "tasks": {"validate_path": {"status": "SUCCESS", "result": true,
-            "error": null, "details": {"is_directory": true | false}},
-            "check_readable": <SKIPPED>, "data_size": <SKIPPED>}}
-  Failure: {"path": path, "tasks": {"validate_path": {"status": "FAILURE", "result": null,
-            "error": "Path does not exist: <path>", "details": null},
-            "check_readable": <SKIPPED>, "data_size": <SKIPPED>}}
+  Success: {"path": path, "log_url": null, "tasks": {"validate_path": {"status": "SUCCESS",
+            "result": true, "error": null, "details": {"is_directory": true | false}},
+            "check_readable": <SKIPPED>, "data_size": <SKIPPED>}, "_log": {...}}
+  Failure: {"path": path, "log_url": null, "tasks": {"validate_path": {"status": "FAILURE",
+            "result": null, "error": "Path does not exist: <path>", "details": null},
+            "check_readable": <SKIPPED>, "data_size": <SKIPPED>}, "_log": {...}}
   """
-  return run_step(new_report(path, CHECK_DATA_STEPS), "validate_path", _validate_path)
+  return run_step(new_report(path, CHECK_DATA_STEPS, "check-data"), "validate_path", _validate_path)
 
 
 @celery_app.task
@@ -166,18 +166,20 @@ def check_readable_task(report):
   return run_step(report, "check_readable", _check_readable)
 
 
-@celery_app.task
-def data_size_task(report):
+@celery_app.task(bind=True)
+def data_size_task(self, report):
   """Last task: run data_size if validate_path and check_readable both returned True.
 
   Its return value is the job's result, sent to the callback and returned by
-  GET /celery/task-status/<external_job_id>.
+  GET /celery/task-status/<external_job_id>. It also adds the job's last log
+  line, uploads the finished log under its own task id (the job's
+  external_job_id), sets log_url, and removes "_log" from the report.
 
   Success: "data_size": {"status": "SUCCESS", "result": <size in bytes>, "error": null, "details": null}
   Failure: "data_size": {"status": "FAILURE", "result": null, "error": "<message>", "details": null}
   Skipped (an earlier step failed or returned False): "data_size": {"status": "SKIPPED", ...all null}
   """
-  return run_step(report, "data_size", _data_size)
+  return run_step(report, "data_size", _data_size, job_id=self.request.id)
 
 
 def submit_check_data(path, callback_url=None, background_tasks=None):
