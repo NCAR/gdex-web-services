@@ -69,11 +69,11 @@ class TestPostTransform:
         assert body["job_type"] == "transform"
         assert body["status"] == "SUCCESS"
         assert "Completed successfully" in body["result"]["msg"]
-        assert body["steps"]["artifacts"] == "SUCCESS"
-        assert body["steps"]["download"] == "SUCCESS"
-        assert body["steps"]["qsub"] == "SUCCESS"
+        assert body["result"]["steps"]["artifacts"] == "SUCCESS"
+        assert body["result"]["steps"]["download"] == "SUCCESS"
+        assert body["result"]["steps"]["qsub"] == "SUCCESS"
         # no callback_url was given
-        assert body["callback"] == {"requested": False, "status": "NOT_REQUESTED", "info": None}
+        assert body["result"]["callback"] == {"requested": False, "status": "NOT_REQUESTED", "info": None}
 
     def test_callback_sent_with_tracked_task_id(self, mock_pipeline):
         url = compose.ALLOWED_CALLBACK_URLs[0]
@@ -88,7 +88,7 @@ class TestPostTransform:
         assert calls[0].kwargs["args"][0]["status"] == "SUCCESS"
 
         # notify_callback is mocked, so the status still shows the WAITING marker from submit time
-        callback = client.get(f"/compose/status/{rid}").json()["callback"]
+        callback = client.get(f"/compose/status/{rid}").json()["result"]["callback"]
         assert callback == {"requested": True, "status": "WAITING", "info": None}
 
     def test_callback_url_not_allowed_is_rejected(self, mock_pipeline):
@@ -121,7 +121,7 @@ class TestStatusRouting:
 
     def test_status_lists_every_step(self):
         rid = "550e8400-e29b-41d4-a716-446655440000"
-        steps = client.get(f"/compose/status/{rid}").json()["steps"]
+        steps = client.get(f"/compose/status/{rid}").json()["result"]["steps"]
         assert list(steps) == transform_tasks.STEP_NAMES
 
     def test_integer_path_still_hits_dscheck_endpoint(self):

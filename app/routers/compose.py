@@ -17,6 +17,7 @@ import logging
 from app.schemas.models import TransformRequest
 from app.celery_app import celery_app
 from app.tasks.callback_task import CallbackError
+from app.tasks.portal.common import job_response
 from app.tasks.transform_tasks import celery_transform, STEP_NAMES
 from app.utils import get_dscheck_json, relpath_validate
 from app.utils.callback import ALLOWED_CALLBACK_URLs
@@ -118,10 +119,11 @@ def get_celery_status(request_id: str) -> Dict[str, Any]:
           PENDING: {"msg": "log file not written yet"}, or {"msg": null} for
           an unknown/expired request_id;
           FAILURE: {"msg": error string}
-        - steps: Celery state of each tracked side task (STEP_NAMES), run as
+        Whatever the status, result also holds these two keys:
+        - result.steps: Celery state of each tracked side task (STEP_NAMES), run as
           task_id "{request_id}:{step}". PENDING means not started, not
           requested (no callback_url) or expired.
-        - callback: {requested, status, info} for the portal callback_url.
+        - result.callback: {requested, status, info} for the portal callback_url.
           requested is false when no callback_url was given (or the record expired).
           status: NOT_REQUESTED, WAITING (job not finished yet), RETRY (portal POST
           failed with a retryable error, backing off), SUCCESS (delivered) or
@@ -162,20 +164,22 @@ def get_celery_status(request_id: str) -> Dict[str, Any]:
     elif not isinstance(callback_info, dict):
         callback_info = None
 
-    return {
-        "job_type": "transform",
-        "external_job_id": request_id,
-        "status": worker_result.state,
-        "result": meta,
-        # Celery-side tasks (not the PBS job); PENDING also means not started / not requested / expired
-        "steps": steps,
-        "callback": {
-            "requested": callback_requested,
-            "status": callback_state if callback_requested else "NOT_REQUESTED",
-            "info": callback_info,
+    # Celery-side tasks (not the PBS job); PENDING also means not started / not requested / expired
+    return job_response(
+        task_id=request_id,
+        status=worker_result.state,
+        result={
+            **meta,
+            "steps": steps,
+            "callback": {
+                "requested": callback_requested,
+                "status": callback_state if callback_requested else "NOT_REQUESTED",
+                "info": callback_info,
+            },
         },
-        "time": datetime.now(timezone.utc).isoformat()
-    }
+        job_type="transform",
+        time=datetime.now(timezone.utc).isoformat(),
+    )
 
 
 @router.get("/log/{request_id}")
