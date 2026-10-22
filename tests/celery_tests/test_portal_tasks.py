@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.celery_app import celery_app
 from app.main import app
-from app.tasks import portal_tasks
+from app.tasks.portal import check_data, common, smoke
 
 client = TestClient(app)
 
@@ -40,7 +40,7 @@ def callback_post(monkeypatch):
 @pytest.fixture(autouse=True)
 def reachable(monkeypatch):
     """pytest's tmp dirs sit under a 0700 directory, so treat their parents as traversable."""
-    monkeypatch.setattr(portal_tasks, "_others_can_reach", lambda path: True)
+    monkeypatch.setattr(check_data, "_others_can_reach", lambda path: True)
 
 
 @pytest.fixture
@@ -88,7 +88,7 @@ class TestSubmit:
     def test_task_is_queued_only_after_the_response(self):
         background_tasks = BackgroundTasks()
         with patch.object(Signature, "apply_async") as apply_async:
-            body = portal_tasks.submit_portal_task(portal_tasks.test_task.s(), background_tasks=background_tasks)
+            body = common.submit_portal_task(smoke.test_task.s(), background_tasks=background_tasks)
 
             assert body["status"] == "SUBMITTED"
             apply_async.assert_not_called()
@@ -151,7 +151,7 @@ class TestStatus:
     def test_step_error_is_recorded_as_failure(self, data_dir, monkeypatch):
         def boom(path):
             raise PermissionError("cannot stat parent")
-        monkeypatch.setattr(portal_tasks, "_others_can_reach", boom)
+        monkeypatch.setattr(check_data, "_others_can_reach", boom)
         job_id = client.get("/files/check-data", params={"path": str(data_dir)}).json()["external_job_id"]
         _wait(job_id)
 
@@ -208,7 +208,7 @@ class TestReadability:
         assert tasks["data_size"] == _step("SKIPPED")
 
     def test_untraversable_parents_make_everything_unreadable(self, data_dir, monkeypatch):
-        monkeypatch.setattr(portal_tasks, "_others_can_reach", lambda path: False)
+        monkeypatch.setattr(check_data, "_others_can_reach", lambda path: False)
 
         details = self._tasks(data_dir)["check_readable"]["details"]
 

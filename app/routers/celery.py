@@ -1,6 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks
 from app.celery_app import celery_app
-from app.tasks.portal_tasks import test_task, job_response, job_status, submit_portal_task
+from app.tasks.portal.common import job_response, job_status, submit_portal_task
+from app.tasks.portal.smoke import test_task
 from celery.result import AsyncResult
 
 router = APIRouter(prefix="/celery", tags=["celery"])

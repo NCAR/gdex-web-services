@@ -27,7 +27,7 @@ def post_to_callback_url(url, payload):
         Callback URL to POST to. The secret is attached whatever the host,
         so only pass URLs that should receive it.
     payload : dict
-        JSON-serializable body, e.g. a portal_tasks.job_response() dict.
+        JSON-serializable body, e.g. a portal.common.job_response() dict.
 
     Returns
     -------

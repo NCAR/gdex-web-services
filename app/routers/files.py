@@ -532,7 +532,7 @@ async def check_access(
 ##############################################################
 
 from fastapi import BackgroundTasks
-from app.tasks.portal_tasks import submit_check_data
+from app.tasks.portal.check_data import submit_check_data
 
 
 @router.get("/check-data")
@@ -544,7 +544,7 @@ def check_data(path: str, background_tasks: BackgroundTasks, callback_url: str |
     if every earlier step returned True, so data_size is skipped when any file
     is unreadable; check_readable's details list the directories holding them.
 
-    Flow (see app/tasks/portal_tasks.py for each task's output):
+    Flow (see app/tasks/portal/check_data.py for each task's output):
       1. This endpoint returns {"external_job_id": "<id>", "status": "SUBMITTED", "result": null}.
       2. After the response is sent, the chain is queued and the worker runs
          validate_path_task -> check_readable_task -> data_size_task.

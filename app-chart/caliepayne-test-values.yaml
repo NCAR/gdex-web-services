@@ -77,7 +77,7 @@ redis:
       memory: 512Mi
       cpu: 500m
 
-# Celery worker: runs app/tasks/transform_tasks.py and app/tasks/portal_tasks.py.
+# Celery worker: runs app/tasks/transform_tasks.py and the app/tasks/portal/ modules.
 # Scales independently of replicaCount.
 celeryWorker:
   name: gdex-webservices-celery
