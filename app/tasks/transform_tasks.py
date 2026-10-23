@@ -30,6 +30,7 @@ from rda_python_common.pg_log import PgLOG
 from app.celery_app import celery_app
 from app.schemas.models import TransformRequest
 from app.tasks.callback_task import notify_callback, mark_callback_waiting
+from app.tasks.portal.common import job_response
 from app.utils import create_transform_payload, create_pbs_script
 
 logger = logging.getLogger(__name__)
@@ -197,13 +198,10 @@ def chain_failed(request, exc, traceback, request_id: str, callback_url: Optiona
     celery_app.backend.mark_as_failure(request_id, RuntimeError(msg), traceback=traceback)
 
     if callback_url:
-        call_back_json = {
-            "job_type": "transform",
-            "external_job_id": request_id,
-            "status": "FAILURE",
-            "result": {"step": step, "msg": msg},
-            "completed": datetime.now(timezone.utc).isoformat(),
-        }
+        call_back_json = job_response(
+            task_id=request_id, status="FAILURE", result={"step": step, "msg": msg},
+            job_type="transform", completed=datetime.now(timezone.utc).isoformat(),
+        )
         notify_callback.apply_async(
             args=[call_back_json,callback_url],
             task_id=f"{request_id}:callback-final",
@@ -317,13 +315,11 @@ def watch_job(self, request_id: str, callback_url: Optional[str] = None, last_li
 
             # the "job_status" is the same state name written above (SUCCESS or PBS_FAILURE_REPORTED)
             # which is what we report back to the callback and ultimately to the client
-            call_back_json = {
-                "job_type": "transform",
-                "external_job_id": request_id,
-                "status": job_status,
-                "result": entry,      # add the JSONL line itself (command, time_of_process, level, ...)
-                "completed": datetime.now(timezone.utc).isoformat(),
-            }
+            # result is the JSONL line itself (command, time_of_process, level, ...)
+            call_back_json = job_response(
+                task_id=request_id, status=job_status, result=entry,
+                job_type="transform", completed=datetime.now(timezone.utc).isoformat(),
+            )
 
             if callback_url:  # only if one was provided in the payload
                 notify_callback.apply_async(

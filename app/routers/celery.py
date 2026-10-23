@@ -17,8 +17,8 @@ def task_status(task_id: str):
     result = AsyncResult(task_id, app=celery_app)
 
     if result.failed():
-        return job_response(task_id, result.status, str(result.result))
+        return job_response(task_id=task_id, status=result.status, result=str(result.result))
 
     # status: PENDING, STARTED, SUCCESS, etc.; result stays None until the task finishes
     value = result.result if result.ready() else None
-    return job_response(task_id, job_status(result.status, value), value)
+    return job_response(task_id=task_id, status=job_status(result.status, value), result=value)

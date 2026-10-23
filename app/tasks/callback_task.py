@@ -9,9 +9,9 @@ Celery stores a failed task as its exception, so CallbackError carries what the
 status endpoint needs in its plain args. This module must stay importable from
 both the worker and the API pods.
 """
-import os
 import httpx
 from app.celery_app import celery_app
+from app.utils.callback import callback_to_portal
 
 # Custom Celery state (only PENDING/STARTED/SUCCESS/FAILURE/RETRY/REVOKED are built-ins).
 # Written on "{request_id}:callback-final" when a callback_url was given, so the status
@@ -55,19 +55,9 @@ def notify_callback(self, result: dict, callback_url: str) -> dict:
       RETRY    info = the CallbackError of the latest failed attempt
     """
 
-    shared_secret = os.environ["GDEX_SERVICES_CALLBACK_SECRET"]
     delay = self.default_retry_delay * 2 ** self.request.retries
     try:
-        resp = httpx.post(
-            callback_url,
-            json=result,
-            headers={
-                "Content-Type": "application/json",
-                "X-GDEX-Services-Secret": shared_secret
-            },
-            timeout=10
-        )
-        resp.raise_for_status()
+        resp = callback_to_portal(callback_url, result)
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
         err = CallbackError(f"Portal callback returned HTTP {status}", status)
