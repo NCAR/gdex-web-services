@@ -31,7 +31,7 @@ from app.celery_app import celery_app
 from app.schemas.models import TransformRequest
 from app.tasks.callback_task import notify_callback, mark_callback_waiting
 from app.tasks.portal.common import job_response
-from app.utils import create_transform_payload, create_pbs_script
+from app.utils import create_transform_payload, create_pbs_script, upload_job_log
 
 logger = logging.getLogger(__name__)
 
@@ -171,18 +171,21 @@ def jsonl_to_celery_state(entry: Dict[str, Any]) -> str:
     return STATE_PBS_PROGRESS
 
 
-def _read_complete_jsons(log_path: Path) -> list:
-    """Parse the newline-terminated lines of the log, one slot per line.
+def _read_complete_jsons(log_path: Path) -> tuple:
+    """Return (entries, raw): the parsed newline-terminated lines of the log, one slot per
+    line, and the exact bytes they were parsed from (for a byte-identical upload).
 
     A line the PBS job is still appending (no trailing newline) is left for the
     next poll. A blank line comes back as {"json_msg": "empty line"} and an undecodable one as
     {"json_msg": "json decode fail at line N"}, so the list length still equals the
     number of complete lines (the caller's last_line index); a corrupt line never
     heals, so it is reported once and not retried."""
-    lines = log_path.read_text().split("\n")
-    # split() leaves the trailing fragment (or "" if text ends with "\n") last
+    data = log_path.read_bytes()
+    raw = data[:data.rfind(b"\n") + 1]  # up to and including the last newline
+    # raw ends with "\n" (or is empty), so split() leaves "" last
+    lines = raw.decode("utf-8", errors="replace").split("\n")[:-1]
     entries = []
-    for number, line in enumerate(lines[:-1], start=1):
+    for number, line in enumerate(lines, start=1):
         if not line.strip():
             entries.append({"json_msg": "empty line"})
             continue
@@ -190,7 +193,7 @@ def _read_complete_jsons(log_path: Path) -> list:
             entries.append(json.loads(line))
         except json.JSONDecodeError:
             entries.append({"json_msg": f"json decode fail at line {number}"})
-    return entries
+    return entries, raw
 
 
 @celery_app.task
@@ -356,9 +359,18 @@ def watch_job(self, request_id: str, callback_url: Optional[str] = None, last_li
         _reschedule_watch(self, request_id, callback_url, last_line, SEARCH_JSONL_INT, time.time())
 
     # Read the new log entries from the last processed line onward
-    entries = _read_complete_jsons(log_path)
+    entries, raw_log = _read_complete_jsons(log_path)
     new_entries = entries[last_line:]
     new_last_line = len(entries)
+
+    # mirror the log to Boreas (same bytes as on glade) whenever it grew. The terminal line
+    # is a new line too, so the final log is uploaded before the callback goes out.
+    # Best effort: a Boreas problem must not fail a healthy job.
+    if new_entries:
+        try:
+            upload_job_log(raw_log, request_id)
+        except Exception:
+            logger.exception(f"Failed to upload log to Boreas for request_id={request_id}")
 
     # if no new entries, keep the state; only re-save it every HEARTBEAT_INT so the
     # result key's TTL does not expire while the job is silent
