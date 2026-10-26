@@ -235,7 +235,11 @@ def run_step(report, name, step, job_id=None):
     WARNING "<name> completed with result False" (with details), or
     ERROR   "<name> failed" (with error)
     INFO    "<name> skipped" instead, if it didn't run
-    After the last step: INFO "<command> job completed", or ERROR "<command> job failed".
+    After the last step, one of:
+      ERROR   "<command> job failed" if any step failed,
+      WARNING "<command> job incomplete" if a step returned False (so later steps were skipped),
+      INFO    "<command> job completed" otherwise.
+    The job's status (see job_status) is still SUCCESS when a step only returned False.
   The last step then uploads the log, named after job_id (the job's external_job_id),
   so the last step's task must pass its own task id as job_id.
   """
@@ -260,6 +264,8 @@ def run_step(report, name, step, job_id=None):
       command = report["_log"]["command"]
       if any(t["status"] == "FAILURE" for t in tasks.values()):
           _log(report, command, "ERROR", f"{command} job failed")
+      elif any(t["result"] is False for t in tasks.values()):
+          _log(report, command, "WARNING", f"{command} job incomplete")
       else:
           _log(report, command, "INFO", f"{command} job completed")
       _save_log(report, job_id)

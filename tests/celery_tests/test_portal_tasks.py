@@ -285,6 +285,7 @@ class TestJobLog:
         levels = [(l["process_message"], l["level"]) for l in _uploaded_log(boreas)]
         assert ("check_readable completed with result False", "WARNING") in levels
         assert ("data_size skipped", "INFO") in levels
+        assert levels[-1] == ("check-data job incomplete", "WARNING")
 
         self._run(tmp_path / "nope")
         lines = _uploaded_log(boreas)
