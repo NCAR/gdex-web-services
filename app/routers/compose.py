@@ -337,9 +337,9 @@ def post_transform(
             f"files={len(request.files)} callback={'yes' if request.callback_url else 'no'}"
         )
     except Exception as e:
-        # Broker (Redis) unreachable — nothing was enqueued
-        logger.exception(f"Failed to queue transform request_id={request_id}")
-        raise HTTPException(status_code=503, detail=f"Failed to queue transform job: {e}") from e
+        # ex: Broker (Redis) unreachable — nothing was enqueued
+        logger.exception(f"Failed to queue transform request_id={request_id} with exception: {e}")
+        raise HTTPException(status_code=503, detail="Failed to queue transform job")
 
     return {
         "external_job_id": request_id,
