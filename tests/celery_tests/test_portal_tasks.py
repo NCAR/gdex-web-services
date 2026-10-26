@@ -47,7 +47,7 @@ def boreas():
 
 
 def _log_url(job_id):
-    return f"https://boreas.hpc.ucar.edu/gdex-data/services_tmp/logs/check_data.{job_id}.jsonl"
+    return f"https://boreas.hpc.ucar.edu/gdex-services/services_tmp/logs/check_data.{job_id}.jsonl"
 
 
 def _uploaded_log(put_object):
@@ -255,7 +255,7 @@ class TestJobLog:
 
         boreas.assert_called_once()
         kwargs = boreas.call_args.kwargs
-        assert kwargs["Bucket"] == "gdex-data"
+        assert kwargs["Bucket"] == "gdex-services"
         assert kwargs["Key"] == f"services_tmp/logs/check_data.{job_id}.jsonl"
         assert kwargs["ACL"] == "public-read"
         assert result["log_url"] == _log_url(job_id)

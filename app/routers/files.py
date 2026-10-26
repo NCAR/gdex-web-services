@@ -555,7 +555,7 @@ def check_data(path: str, background_tasks: BackgroundTasks, callback_url: str |
 
     Final result, everything readable:
       {"external_job_id": "<id>", "status": "SUCCESS", "result": {"path": "<path>",
-       "log_url": "https://boreas.hpc.ucar.edu/gdex-data/services_tmp/logs/check_data.<id>.jsonl", "tasks": {
+       "log_url": "https://boreas.hpc.ucar.edu/gdex-services/services_tmp/logs/check_data.<id>.jsonl", "tasks": {
         "validate_path":  {"status": "SUCCESS", "result": true, "error": null, "details": {"is_directory": true}},
         "check_readable": {"status": "SUCCESS", "result": true, "error": null, "details": {"file_count": 2,
                            "unreadable_file_count": 0, "unreadable_directories": [], "unscanned_directories": []}},

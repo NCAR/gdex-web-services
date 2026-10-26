@@ -14,7 +14,7 @@ from typing import Any, Dict, List
 
 from app.utils.boreas import _OBJECT_STORE_ENDPOINT, s3_client
 
-_BUCKET = "gdex-data"
+_BUCKET = "gdex-services"
 _LOG_PREFIX = "services_tmp/logs"
 
 _VALID_LEVELS = {"ERROR", "WARNING", "INFO", "DEBUG"}
@@ -86,7 +86,7 @@ def job_log_url(endpoint: str, job_id: str, prefix: str = _LOG_PREFIX) -> str:
     Returns
     -------
     str
-        e.g. https://boreas.hpc.ucar.edu/gdex-data/services_tmp/logs/check_data.<job_id>.jsonl
+        e.g. https://boreas.hpc.ucar.edu/gdex-services/services_tmp/logs/check_data.<job_id>.jsonl
     """
     return f"{_OBJECT_STORE_ENDPOINT}/{_BUCKET}/{_job_log_key(endpoint, job_id, prefix)}"
 
