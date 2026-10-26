@@ -2,8 +2,9 @@
 
 from app.utils.boreas import _OBJECT_STORE_ENDPOINT, s3_client
 
-_BUCKET = "gdex-data"
+_BUCKET = "gdex-services"
 _PBS_PREFIX = "services_tmp/pbs"
+_DEFAULT_ENV_ACTIVATION = "source /glade/u/home/gdexdata/gdexwsenv/bin/activate"
 
 
 def _generate_pbs_script(
@@ -15,7 +16,7 @@ def _generate_pbs_script(
     mem_gb: int = 1,
     walltime: str = "00:05:00",
     queue: str = "gdex",
-    env_activation: str = "source /glade/u/home/gdexdata/gdexwsenv/bin/activate"
+    env_activation: str = _DEFAULT_ENV_ACTIVATION
 ) -> str:
     """Generate a PBS job script for transform processing.
 
@@ -134,7 +135,7 @@ def create_pbs_script(
     mem_gb: int = 1,
     walltime: str = "00:05:00",
     queue: str = "gdex",
-    env_activation: str = "source /glade/u/home/chiaweih/gdex-web-services/test-gdexws-env/bin/activate"
+    env_activation: str = _DEFAULT_ENV_ACTIVATION
 ) -> str:
     """Generate PBS script and upload to Boreas object store.
 
@@ -159,7 +160,7 @@ def create_pbs_script(
     queue : str, optional
         PBS queue name. Default: "gdex"
     env_activation : str, optional
-        Environment activation command. Default: source conda environment
+        Environment activation command. Default: "source /glade/u/home/gdexdata/gdexwsenv/bin/activate"
 
     Returns
     -------

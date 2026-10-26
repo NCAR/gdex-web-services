@@ -78,7 +78,7 @@ spec:
           value: "redis://{{ $redisAuth }}{{ $redisHost }}:{{ .Values.redis.port }}/{{ .Values.redis.brokerDb }}"
         - name: CELERY_RESULT_BACKEND
           value: "redis://{{ $redisAuth }}{{ $redisHost }}:{{ .Values.redis.port }}/{{ .Values.redis.resultDb }}"
-        # Sent as X-GDEX-Services-Secret on portal callbacks (app/utils/callback.py post_to_callback_url);
+        # Sent as X-GDEX-Services-Secret on portal callbacks (app/utils/callback.py callback_to_portal);
         # the portal's GdexServicesReceiver rejects callbacks without it.
         - name: GDEX_SERVICES_CALLBACK_SECRET
           valueFrom:
@@ -108,6 +108,11 @@ spec:
             secretKeyRef:
               name: {{ .Values.webapp.pgdb01Secret.existingSecret.name }}
               key: dssdbpass
+        - name: GDEX_SERVICES_CALLBACK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.webapp.callbackSecret.name }}
+              key: {{ .Values.webapp.callbackSecret.key }}
         volumeMounts:
         - mountPath: {{ .Values.webapp.volume.mountPath }}
           name: {{ .Values.webapp.volume.name }}

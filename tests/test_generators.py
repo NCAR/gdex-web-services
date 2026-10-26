@@ -49,14 +49,14 @@ class TestVisualize:
         assert resp.status_code == 200
         body = resp.json()
         assert body["variable"] == "temperature"
-        assert body["bucket"] == "gdex-data"
+        assert body["bucket"] == "gdex-services"
         assert body["key"].startswith("services_tmp/")
         assert body["key"].endswith(".png")
-        assert body["location"] == f"https://boreas.ucar.edu/gdex-data/{body['key']}"
+        assert body["location"] == f"https://boreas.ucar.edu/gdex-services/{body['key']}"
 
         mock_client.put_object.assert_called_once()
         _, kwargs = mock_client.put_object.call_args
-        assert kwargs["Bucket"] == "gdex-data"
+        assert kwargs["Bucket"] == "gdex-services"
         assert kwargs["Key"] == body["key"]
         assert kwargs["ContentType"] == "image/png"
         assert kwargs["Body"].startswith(b"\x89PNG")

@@ -15,7 +15,7 @@ from app.utils.boreas import _OBJECT_STORE_ENDPOINT, s3_client
 
 router = APIRouter(prefix="/generators", tags=["generators"])
 
-_BUCKET = "gdex-data"
+_BUCKET = "gdex-services"
 _OBJECT_PREFIX = "services_tmp"
 _ALLOWED_ROOT = "/glade/"
 

@@ -7,8 +7,9 @@ This file is laid out in the order a job uses it:
   3. Callbacks           telling the caller the job is done
   4. Step reports        how a chain of steps records each step's outcome
 """
+import httpx
 from app.celery_app import celery_app
-from app.utils.callback import post_to_callback_url
+from app.utils.callback import callback_to_portal
 from app.utils.job_log import log_format, upload_job_log
 
 
@@ -28,17 +29,24 @@ from app.utils.job_log import log_format, upload_job_log
 #####################################################################
 
 
-def job_response(task_id, status, result=None):
-  """Fields returned for every portal task, in API responses and callback payloads.
+def job_response(task_id, status, result=None, **extra):
+  """Build the response for any job: portal chains and transform jobs alike.
 
-  result holds the task's return value (for a chain, a step report: see run_step),
-  or the error message if the task crashed outside a step.
+  Used for API responses and callback payloads. 
+  
+  'result' is the job's output:
+  a step report (portal chain), a log entry (transform), or an error message.
+  extra adds job-specific fields, e.g. job_type and completed (transform).
 
-  Returns:
-    {"external_job_id": "<celery task id>", "status": "SUBMITTED" | "PENDING" | "STARTED"
-     | "SUCCESS" | "FAILURE", "result": <step report, string, or null>}
+  Returns format:
+    {
+      "external_job_id": "<task id>",
+      "status": "<job status>",
+      "result": <step report | log entry | error message | null>,
+      **extra
+    }
   """
-  return {"external_job_id": task_id, "status": status, "result": result}
+  return {"external_job_id": task_id, "status": status, "result": result, **extra}
 
 
 def job_status(celery_status, result):
@@ -81,7 +89,7 @@ def submit_portal_task(sig, callback_url=None, background_tasks=None):
       background_tasks.add_task(sig.apply_async)
   else:
       sig.apply_async()
-  return job_response(task_id, "SUBMITTED")
+  return job_response(task_id=task_id, status="SUBMITTED")
 
 
 #####################################################################
@@ -89,6 +97,21 @@ def submit_portal_task(sig, callback_url=None, background_tasks=None):
 #
 # Celery runs one of these after the job ends, if a callback_url was given.
 #####################################################################
+
+
+def _send_callback(callback_url, payload):
+  """POST payload to callback_url; a portal rejection (4xx/5xx) is printed to the worker log, not raised.
+
+  Nothing is retried. A portal that can't be reached at all still raises httpx.HTTPError.
+  """
+  try:
+    callback_to_portal(callback_url, payload)
+  except httpx.HTTPStatusError as e:
+    try:
+      reason = e.response.json().get("message", e.response.text)
+    except (ValueError, AttributeError):
+      reason = e.response.text[:500]
+    print(f"Callback to {callback_url} failed with status code {e.response.status_code}: {reason}")
 
 
 @celery_app.task
@@ -100,7 +123,7 @@ def notify_callback_success(result, callback_url, task_id):
 
   Posts: {"external_job_id": task_id, "status": "SUCCESS" | "FAILURE", "result": <step report>}
   """
-  post_to_callback_url(callback_url, job_response(task_id, job_status("SUCCESS", result), result))
+  _send_callback(callback_url, job_response(task_id=task_id, status=job_status("SUCCESS", result), result=result))
 
 
 @celery_app.task
@@ -113,7 +136,7 @@ def notify_callback_failure(request, exc, traceback, callback_url, task_id):
   Posts: {"external_job_id": task_id, "status": "FAILURE", "result": "<error message>"}
   """
   # Celery calls errbacks with (request, exc, traceback) ahead of the signature's own args
-  post_to_callback_url(callback_url, job_response(task_id, "FAILURE", str(exc)))
+  _send_callback(callback_url, job_response(task_id=task_id, status="FAILURE", result=str(exc)))
 
 
 #####################################################################

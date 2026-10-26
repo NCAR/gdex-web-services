@@ -1,25 +1,27 @@
-"""Utility functions for sending task results to a caller's callback URL.
+"""Utility function for sending task results to a caller's callback URL.
 
 The gdex-web-portal's GdexServicesReceiver only accepts callbacks carrying the
 shared secret from the gdex-services-callback-secret Kubernetes Secret, which
 the Celery worker receives as the GDEX_SERVICES_CALLBACK_SECRET env var.
+
+Both callback paths (portal jobs in app/tasks/portal/common.py and transform jobs
+in app/tasks/callback_task.py) send through here; each decides how to handle a failure.
 """
 
 import os
+import httpx
 
-import requests
+# set up callback URL for safety checks
+PORTAL_CALLBACK_URL = "https://gdex.ucar.edu/api/gdex-services-event/"
+ALLOWED_CALLBACK_URLs = [PORTAL_CALLBACK_URL]
 
-
-def post_to_callback_url(url, payload):
+def callback_to_portal(url, payload, timeout=10):
     """POST a JSON payload to a callback URL with the gdex-services shared secret.
 
     Sends the secret in the X-GDEX-Services-Secret header, read from the
-    GDEX_SERVICES_CALLBACK_SECRET env var on every call. If the env var is
-    unset, an empty header is sent and the portal will reject the callback.
-
-    The outcome is printed to the worker log rather than raised: a rejected
-    callback logs the status code and the portal's JSON "message" (or the
-    first 500 characters of a non-JSON body). Nothing is retried.
+    GDEX_SERVICES_CALLBACK_SECRET env var on every call. Raises KeyError if the
+    env var is unset, rather than sending a callback the portal would reject.
+    Nothing is retried here; callers choose their own retry policy.
 
     Parameters
     ----------
@@ -28,29 +30,35 @@ def post_to_callback_url(url, payload):
         so only pass URLs that should receive it.
     payload : dict
         JSON-serializable body, e.g. a portal.common.job_response() dict.
+    timeout : float
+        Seconds to wait for the portal. Default: 10
 
     Returns
     -------
-    None
+    httpx.Response
+        The portal's 2xx response.
 
     Raises
     ------
-    requests.RequestException
-        If the request can't be sent (e.g. connection error).
-    ValueError
-        If the callback succeeds but its response body isn't JSON.
+    httpx.HTTPStatusError
+        If the portal answers with a 4xx/5xx status (e.response has the details).
+    httpx.HTTPError
+        If the portal can't be reached (connection error, timeout).
+    KeyError
+        If GDEX_SERVICES_CALLBACK_SECRET is not set.
     """
-    # The portal rejects callbacks without its shared secret (gdex-services-callback-secret)
-    headers = {"X-GDEX-Services-Secret": os.environ.get("GDEX_SERVICES_CALLBACK_SECRET", "")}
-    response = requests.post(url, json=payload, headers=headers)
-    if response.ok:
-        print("Success")
-        print(response.json())
-    else:
-        # The portal explains rejections in a JSON "message" (e.g. secret missing or
-        # mismatched, unknown task id); fall back to the raw body for non-JSON errors
-        try:
-            reason = response.json().get("message", response.text)
-        except (ValueError, AttributeError):
-            reason = response.text[:500]
-        print(f"Callback to {url} failed with status code {response.status_code}: {reason}")
+    if url != PORTAL_CALLBACK_URL:
+        raise ValueError(f"Callback URL {url} is not allowed for portal callbacks.")
+
+    shared_secret = os.environ["GDEX_SERVICES_CALLBACK_SECRET"]
+    response = httpx.post(
+        url,
+        json=payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-GDEX-Services-Secret": shared_secret
+        },
+        timeout=timeout
+    )
+    response.raise_for_status()
+    return response

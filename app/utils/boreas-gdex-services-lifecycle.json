@@ -1,0 +1,14 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-services-tmp-after-2-days",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "services_tmp/"
+      },
+      "Expiration": {
+        "Days": 2
+      }
+    }
+  ]
+}

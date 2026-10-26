@@ -14,11 +14,14 @@ GET /compose/status/{request_id}, then fires notify_callback if a
 callback URL was supplied.
 """
 import json
+import logging
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import httpx
 from celery import chain
+from celery.result import AsyncResult
 from celery.exceptions import Ignore
 
 from rda_python_common.pg_dbi import PgDBI
@@ -26,7 +29,15 @@ from rda_python_common.pg_log import PgLOG
 
 from app.celery_app import celery_app
 from app.schemas.models import TransformRequest
+from app.tasks.callback_task import notify_callback, mark_callback_waiting
+from app.tasks.portal.common import job_response
 from app.utils import create_transform_payload, create_pbs_script
+
+logger = logging.getLogger(__name__)
+
+# Tracked tasks run under task_id "{request_id}:{name}" (watch_job keeps the bare request_id).
+# GET /compose/status/{request_id} reports the state of each of these.
+STEP_NAMES = ["artifacts", "download", "qsub", "callback-final"]
 
 WORKDIR = str(Path("/glade/campaign/collections/gdex/data/exchange/Web-services/"))
 
@@ -34,13 +45,16 @@ WORKDIR = str(Path("/glade/campaign/collections/gdex/data/exchange/Web-services/
 PBS_COMPLETED = "PBS job completed"
 PBS_FAILED = "PBS job failed"
 
-# Custom Celery states. Only PENDING/STARTED/SUCCESS/FAILURE/RETRY/REVOKED are
-# Celery built-ins; anything else means "still going, check info/meta".
+# Custom Celery states. 
+# Only PENDING/STARTED/SUCCESS/FAILURE/RETRY/REVOKED are Celery built-ins.
 STATE_PBS_PROGRESS = "PBS_PROGRESS"
 STATE_PBS_FAILURE_REPORTED = "PBS_FAILURE_REPORTED"
 
 READ_JSONL_INT = 15        # seconds between JSONL reads once the log exists
 SEARCH_JSONL_INT = 10        # seconds between checks while the log does not exist yet
+# Silent polls never write to Redis, so the result key's TTL (result_expires) would run out
+# on a long quiet job. Re-save the current state this often; keep it well under result_expires.
+HEARTBEAT_INT = 12 * 60 * 60  # seconds
 
 # pgadd/pgget log flags: log errors but never EXITLG — sys.exit(1) would kill the
 # worker process (WorkerLostError) instead of failing/retrying the task normally.
@@ -158,26 +172,45 @@ def _read_complete_jsons(log_path: Path) -> list:
     return lines[:-1]
 
 
-@celery_app.task(bind=True, max_retries=5, default_retry_delay=10)
-def notify_callback(self, result: dict, callback_url: str) -> None:
-    """POST the final job result to the portal's callback URL.
+@celery_app.task
+def chain_failed(request, exc, traceback, request_id: str, callback_url: Optional[str] = None) -> None:
+    """Error handler (link_error) for the build -> curl -> qsub chain.
 
-    Deliberately separate from watch_job: a portal endpoint gets its
-    own retry/backoff and doesn't affect tracking of the PBS job itself.
-    Delivery is at-least-once, so the receiver should treat repeats for the
-    same request_id as idempotent.
+    Runs when a chain step fails for good (after its retries). Celery already
+    skips the steps after the failed one; this marks the request FAILURE on the
+    request_id key (what GET /compose/status/{request_id} reads, and what makes
+    watch_job stop polling) and sends the final callback so the portal is told.
+    The failing step is the suffix of its task id ("{request_id}:{step}").
+
+    A duplicate run of the chain (redelivered message) can fail after another run already
+    got the job going. Only act while the request is still PENDING (watch_job has seen no
+    log yet); any other state means the job is tracked, finished, or already failed.
     """
+    step = request.id.rsplit(":", 1)[-1]
+    current = AsyncResult(request_id, app=celery_app).state
+    if current != "PENDING":
+        logger.warning(
+            f"Ignoring failure of step '{step}' for request_id={request_id}: "
+            f"request already in state {current} (duplicate chain run?)"
+        )
+        return
+    msg = f"Step '{step}' failed: {exc!r}"
+    celery_app.backend.mark_as_failure(request_id, RuntimeError(msg), traceback=traceback)
 
-    try:
-        resp = httpx.post(callback_url, json=result, timeout=10)
-        resp.raise_for_status()
-    # if the HTTP POST fails, retry with exponential backoff
-    except httpx.HTTPError as exc:
-        raise self.retry(exc=exc, countdown=self.default_retry_delay * 2 ** self.request.retries)
+    if callback_url:
+        call_back_json = job_response(
+            task_id=request_id, status="FAILURE", result={"step": step, "msg": msg},
+            job_type="transform", completed=datetime.now(timezone.utc).isoformat(),
+        )
+        notify_callback.apply_async(
+            args=[call_back_json,callback_url],
+            task_id=f"{request_id}:callback-final",
+        )
 
 
 @celery_app.task(bind=True, track_started=False)
-def watch_job(self, request_id: str, callback_url: Optional[str] = None, last_line: int = 0):
+def watch_job(self, request_id: str, callback_url: Optional[str] = None, last_line: int = 0,
+              last_refresh: Optional[float] = None):
     """Tail {request_id}.gdexws.jsonl and mirror it into this task's state.
 
     Each run is one jsonl file read: if the job hasn't finished, the task
@@ -189,10 +222,11 @@ def watch_job(self, request_id: str, callback_url: Optional[str] = None, last_li
 
     States seen by GET /compose/status/{request_id}:
       PENDING           log file not written yet (or unknown request_id)
-      PROGRESS          latest JSONL line, level != ERROR (info = that line)
+      PBS_PROGRESS          latest JSONL line, level != ERROR (info = that line)
       PBS_FAILURE_REPORTED  latest JSONL line, level == ERROR (info = that line), PBS job error reported
       SUCCESS           terminal line seen; info.job_status = completed|failed
-      FAILURE           the celery worker/watcher itself broke (bad JSON, I/O error, bug)
+      FAILURE           the celery worker/watcher itself broke (bad JSON, I/O error, bug),
+                        or a chain step failed (set by chain_failed; polling then stops)
 
     Independently invokable: nothing here requires having come from
     POST /compose/transform. For a job re-run by hand on HPC:
@@ -208,23 +242,58 @@ def watch_job(self, request_id: str, callback_url: Optional[str] = None, last_li
       - Crashes: an unhandled exception (bad JSON line, I/O error, bug) marks the task
         FAILURE and stops polling, and notify_callback is never fired, so the portal
         is never told.
+
+    Celery worker meta information
+    1. if log file not exist 
+       - state = PENDING
+       - meta.msg = "log file not written yet"
+    2. if new entries exist but none are terminal
+       - state = PBS_PROGRESS
+       - meta.msg = latest JSONL line
+    3. if new entries exist but none are terminal WITH error in json in jsonl with "level" : "ERROR"
+       - state = PBS_FAILURE_REPORTED
+       - meta.msg = latest JSONL line with "level" : "ERROR"
+    4. if a terminal line is found (PBS_COMPLETED or PBS_FAILED)
+       - state = SUCCESS|FAILURE
+       - meta.msg = where the log file is, e.g. "Completed successfully. Check the {log_path} for details."
     """
     log_path = Path(WORKDIR) / f"{request_id}.gdexws.jsonl"
+
+    # a chain step failed: chain_failed already marked this request FAILURE and notified
+    # the callback, so stop polling and keep that state
+    if self.AsyncResult(request_id).state == "FAILURE":
+        raise Ignore()
 
     # if log does not exist
     if not log_path.exists():
         # change state to PENDING
-        self.update_state(state="PENDING", meta={"info": "log file not written yet"})
-        # reschedule the watch to check again later
-        _reschedule_watch(self, request_id, callback_url, last_line, SEARCH_JSONL_INT)
+        self.update_state(state="PENDING", meta={"msg": "log file not written yet"})
+        # reschedule the watch to check again later (the write above refreshed the TTL)
+        _reschedule_watch(self, request_id, callback_url, last_line, SEARCH_JSONL_INT, time.time())
 
     lines = _read_complete_jsons(log_path)
     new_entries = [json.loads(line) for line in lines[last_line:] if line.strip()]
     new_last_line = len(lines)
 
-    # if no new entries, just reschedule the watch without changing state
+    # if no new entries, keep the state; only re-save it every HEARTBEAT_INT so the
+    # result key's TTL does not expire while the job is silent
     if not new_entries:
-        _reschedule_watch(self, request_id, callback_url, last_line, READ_JSONL_INT)
+        now = time.time()
+        if last_refresh is None:
+            last_refresh = now  # first silent poll: start the heartbeat clock
+        elif now - last_refresh >= HEARTBEAT_INT:
+            prev = self.AsyncResult(request_id)
+            # PENDING can be real (log exists but has no complete line yet, state written by
+            # the "log file not written yet" branch, with meta) or an expired/missing key
+            # (no meta). Only the first has anything to restore.
+            if prev.info:
+                self.update_state(
+                    state=prev.state,
+                    meta={**(prev.info or {}),
+                          "last_polled_at": datetime.now(timezone.utc).isoformat()},
+                )
+            last_refresh = now
+        _reschedule_watch(self, request_id, callback_url, last_line, READ_JSONL_INT, last_refresh)
 
     # identify terminal lines (PBS_COMPLETED or PBS_FAILED) for PBS job completion state
     for entry in new_entries:
@@ -232,32 +301,48 @@ def watch_job(self, request_id: str, callback_url: Optional[str] = None, last_li
         if msg in (PBS_COMPLETED, PBS_FAILED):
             # Terminal line: the PBS job has finished, successfully or not
             if msg == PBS_COMPLETED:
-                job_status = "completed"
+                job_status = "SUCCESS"
+                self.update_state(
+                    state=job_status,
+                    meta={"msg": f"Completed successfully. Check the {log_path} for details."}
+                )
             else:
-                job_status = "failed"
+                job_status = STATE_PBS_FAILURE_REPORTED
+                self.update_state(
+                    state=job_status,  # FAILURE state is reserved for celery worker errors
+                    meta={"msg": f"Completed with exit code 1 during transform. Check the {log_path} for details."}
+                )
 
-            # the result "job_status" is the PBS job status not the task status
+            # the "job_status" is the same state name written above (SUCCESS or PBS_FAILURE_REPORTED)
             # which is what we report back to the callback and ultimately to the client
-            result = {"request_id": request_id, "job_status": job_status}
-            result.update(entry)  # add the JSONL line itself (command, time_of_process, level, ...)
+            # result is the JSONL line itself (command, time_of_process, level, ...)
+            call_back_json = job_response(
+                task_id=request_id, status=job_status, result=entry,
+                job_type="transform", completed=datetime.now(timezone.utc).isoformat(),
+            )
 
             if callback_url:  # only if one was provided in the payload
-                notify_callback.delay(result, callback_url)
+                notify_callback.apply_async(
+                    args=[call_back_json, callback_url],
+                    task_id=f"{request_id}:callback-final",
+                )
             # after notifying the callback, we can stop watching as the job has reached a terminal state
-            return result
+            # Ignore (no reschedule) keeps the state/meta written above; a return would overwrite them with SUCCESS
+            raise Ignore()
 
     # only update the state with the latest entry if there are new entries
     latest = new_entries[-1]
     self.update_state(state=jsonl_to_celery_state(latest), meta=latest)
 
-    _reschedule_watch(self, request_id, callback_url, new_last_line, READ_JSONL_INT)
+    _reschedule_watch(self, request_id, callback_url, new_last_line, READ_JSONL_INT, time.time())
 
 
-def _reschedule_watch(task, request_id: str, callback_url: Optional[str], last_line: int, countdown: int):
+def _reschedule_watch(task, request_id: str, callback_url: Optional[str], last_line: int, countdown: int,
+                      last_refresh: Optional[float] = None):
     """Queue the next watch_job poll (a manual retry) under the same task id, then stop this
-    run without writing a result (Ignore keeps the current state/meta)."""
+    run without writing a result ("Ignore()" keeps the current state/meta)."""
     watch_job.apply_async(
-        args=[request_id, callback_url, last_line],
+        args=[request_id, callback_url, last_line, last_refresh],
         task_id=task.request.id,
         countdown=countdown,
     )
@@ -273,15 +358,29 @@ def celery_transform(request_dict: dict, request_id: str, specialist: str) -> No
     callback_url only ever travels to watch_job — the chain, the dscheck rows
     and the PBS script never see it.
     """
-    chain(
-        create_boreas_artifacts.s(request_dict, request_id),
-        add_dscheck_download.s(specialist), # the first arg is the return of the previous task
-        add_dscheck_qsub.s(),
-    ).apply_async()
+    callback_url = request_dict.get("CallbackUrl")
 
-    # initialize the watch job for this request
-    # (the watcher will keep retrying until the PBS job finishes or fails)
-    watch_job.apply_async(
-        args=[request_id, request_dict.get("CallbackUrl")],
-        task_id=request_id,
-    )
+    # record that a callback is expected before anything can finish and fire it
+    if callback_url:
+        mark_callback_waiting(request_id)
+
+    # Watcher first: it idles in PENDING until the job log appears, so starting it early is
+    # harmless. If the chain publish then fails, the stray watcher is stopped below; the
+    # other order could leave a running job that nothing tracks.
+    watch_job.apply_async(args=[request_id, callback_url], task_id=request_id)
+
+    try:
+        chain(
+            create_boreas_artifacts.s(request_dict, request_id).set(task_id=f"{request_id}:artifacts"),
+            # the first arg is the return of the previous task
+            add_dscheck_download.s(specialist).set(task_id=f"{request_id}:download"),
+            add_dscheck_qsub.s().set(task_id=f"{request_id}:qsub"),
+        ).apply_async(link_error=chain_failed.s(request_id, callback_url))
+    except Exception as exc:
+        # nothing will run: stop the watcher (it checks for FAILURE on every poll). Best effort,
+        # the backend is the same Redis that just failed.
+        try:
+            celery_app.backend.mark_as_failure(request_id, exc)
+        except Exception:
+            logger.exception(f"Could not mark request_id={request_id} failed after chain publish error")
+        raise
