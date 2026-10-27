@@ -179,7 +179,7 @@ def data_size_task(self, report):
   Failure: "data_size": {"status": "FAILURE", "result": null, "error": "<message>", "details": null}
   Skipped (an earlier step failed or returned False): "data_size": {"status": "SKIPPED", ...all null}
   """
-  return run_step(report, "data_size", _data_size, job_id=self.request.id)
+  return run_step(report, "data_size", _data_size, external_job_id=self.request.id)
 
 
 def submit_check_data(path, callback_url=None, background_tasks=None):

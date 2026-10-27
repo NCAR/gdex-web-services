@@ -176,7 +176,9 @@ def _step_entry(status, result=None, error=None, details=None):
 
 
 def new_report(path, steps, endpoint):
-  """Start a step report with every step SKIPPED, so the shape is complete however far the chain gets.
+  """Start a step report with an entry for every step, all SKIPPED. 
+  Each step replaces its own entry when it runs, 
+  so any step that never runs stays SKIPPED and every step always appears in the result.
 
   steps is the endpoint's step names, in the order they run. endpoint is the
   name of the endpoint that started the job (e.g. "check-data"). It's the
@@ -186,23 +188,23 @@ def new_report(path, steps, endpoint):
 
   Returns:
     {"path": path, "log_url": null, "tasks": {"<step 1>": <SKIPPED entry>, ...},
-     "_log": {"command": endpoint, "lines": [<job started line>]}}
+     "_log": {"command": endpoint, "json_lines": [<job started line>]}}
   """
   return {
       "path": path,
       "log_url": None,
       "tasks": {name: _step_entry("SKIPPED") for name in steps},
       "_log": {"command": endpoint,
-               "lines": [log_format(endpoint, "INFO", f"{endpoint} job started", path=path)]},
+               "json_lines": [log_format(endpoint, "INFO", f"{endpoint} job started", path=path)]},
   }
 
 
 def _log(report, command, level, message, **kwargs):
   """Add one log_format line to the job's log."""
-  report["_log"]["lines"].append(log_format(command, level, message, **kwargs))
+  report["_log"]["json_lines"].append(log_format(command, level, message, **kwargs))
 
 
-def _save_log(report, job_id):
+def _save_log(report, external_job_id):
   """Upload the job's log to Boreas, set log_url, and drop the lines from the report.
 
   A failed upload is printed to the worker log rather than failing the job, and
@@ -210,12 +212,12 @@ def _save_log(report, job_id):
   """
   log = report.pop("_log")
   try:
-      report["log_url"] = upload_job_log(log["command"], job_id, log["lines"])
+      report["log_url"] = upload_job_log(log["command"], external_job_id, log["json_lines"])
   except Exception as e:
-      print(f"Could not upload the log for job {job_id} to Boreas: {e}")
+      print(f"Could not upload the log for job {external_job_id} to Boreas: {e}")
 
 
-def run_step(report, name, step, job_id=None):
+def run_step(report, name, step, external_job_id=None):
   """Run one step of a chain and record its outcome under report["tasks"][name].
 
   The step only runs if every earlier step succeeded with result True; otherwise
@@ -240,8 +242,8 @@ def run_step(report, name, step, job_id=None):
       WARNING "<command> job incomplete" if a step returned False (so later steps were skipped),
       INFO    "<command> job completed" otherwise.
     The job's status (see job_status) is still SUCCESS when a step only returned False.
-  The last step then uploads the log, named after job_id (the job's external_job_id),
-  so the last step's task must pass its own task id as job_id.
+  The last step then uploads the log, named after external_job_id, so the last
+  step's task must pass its own task id (the job's external_job_id) as external_job_id.
   """
   tasks = report["tasks"]
   names = list(tasks)
@@ -268,5 +270,5 @@ def run_step(report, name, step, job_id=None):
           _log(report, command, "WARNING", f"{command} job incomplete")
       else:
           _log(report, command, "INFO", f"{command} job completed")
-      _save_log(report, job_id)
+      _save_log(report, external_job_id)
   return report
