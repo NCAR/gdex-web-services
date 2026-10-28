@@ -106,57 +106,59 @@ def get_celery_status(external_job_id: str) -> Dict[str, Any]:
         - job_type: Always "transform"
         - external_job_id: Request identifier
         - status: State of the watch_job task (task_id == external_job_id):
-            PENDING (log not written yet, or unknown/expired external_job_id),
-            PBS_PROGRESS, 
-            PBS_FAILURE_REPORTED (the job logged an ERROR line),
-            SUCCESS (the PBS job reached a terminal line; see result.status =
-                completed|failed, so a failed PBS job is still SUCCESS here),
-            FAILURE (the status watcher itself broke)
-        - result: Depends on status
-            PBS_PROGRESS / PBS_FAILURE_REPORTED: the latest JSONL log entry
-                (gdexws log_format dict);
-            SUCCESS: the final payload {job_type, external_job_id,
-                status (completed|failed), result (terminal JSONL line), completed};
-            PENDING: {"msg": "log file not written yet"}, or {"msg": null} for
-                an unknown/expired external_job_id;
-            FAILURE: {"msg": error string}
-
-        Whatever the status, result also holds these two keys:
-        - result.steps: Celery state of each tracked side task (STEP_NAMES), run as
-          task_id "{external_job_id}:{step}". PENDING means not started, not
-          requested (no callback_url) or expired.
-        - result.callback: {requested, status, info} for the portal callback_url.
-          requested is false when no callback_url was given (or the record expired).
-          status: NOT_REQUESTED, WAITING (job not finished yet), RETRY (portal POST
-          failed with a retryable error, backing off), SUCCESS (delivered) or
-          FAILURE (rejected with a 4xx, or retries exhausted).
-          info: {"http_status": 2xx} on SUCCESS; {"msg", "http_status"} on RETRY / FAILURE,
-          where http_status is the portal's status code (null if it was never reached);
-          null otherwise.
-          A 4xx other than 408/429 fails at once with no retry.
+            - PENDING: log not written yet, or unknown/expired external_job_id
+            - PBS_PROGRESS
+            - PBS_FAILURE_REPORTED: the job logged an ERROR line
+            - SUCCESS: the PBS job reached a terminal line; see result.status =
+              completed|failed, so a failed PBS job is still SUCCESS here
+            - FAILURE: the status watcher itself broke
+        - result: Depends on status; whatever the status, it also holds `steps`
+          and `callback`.
+            - PBS_PROGRESS / PBS_FAILURE_REPORTED: the latest JSONL log entry
+              (gdexws log_format dict)
+            - SUCCESS: the final payload {job_type, external_job_id,
+              status (completed|failed), result (terminal JSONL line), completed}
+            - PENDING: {"msg": "log file not written yet"}, or {"msg": null} for
+              an unknown/expired external_job_id
+            - FAILURE: {"msg": error string}
+            - steps: Celery state of each tracked side task (STEP_NAMES), run as
+              task_id "{external_job_id}:{step}". PENDING means not started, not
+              requested (no callback_url) or expired.
+            - callback: {requested, status, info} for the portal callback_url.
+                - requested: false when no callback_url was given (or the record expired)
+                - status: NOT_REQUESTED, WAITING (job not finished yet), RETRY (portal
+                  POST failed with a retryable error, backing off), SUCCESS (delivered)
+                  or FAILURE (rejected with a 4xx, or retries exhausted)
+                - info: {"http_status": 2xx} on SUCCESS; {"msg", "http_status"} on
+                  RETRY / FAILURE, where http_status is the portal's status code (null
+                  if it was never reached); null otherwise.
+                  A 4xx other than 408/429 fails at once with no retry.
         - time: UTC ISO timestamp of this response
 
-    example:
+    Example:
+
+    ```json
     {
         "external_job_id": "886c24a2-b67f-4a7d-94b0-2336dfade9bc",
         "status": "PENDING",
         "result": {
             "msg": "log file not written yet",
             "steps": {
-            "artifacts": "SUCCESS",
-            "download": "SUCCESS",
-            "qsub": "RETRY",
-            "callback-final": "WAITING"
+                "artifacts": "SUCCESS",
+                "download": "SUCCESS",
+                "qsub": "RETRY",
+                "callback-final": "WAITING"
             },
             "callback": {
-            "requested": true,
-            "status": "WAITING",
-            "info": null
+                "requested": true,
+                "status": "WAITING",
+                "info": null
             }
         },
         "job_type": "transform",
         "time": "2026-10-28T17:15:36.455343+00:00"
     }
+    ```
 
     Examples
     --------
@@ -329,6 +331,22 @@ def post_transform(
              ],
              "CallbackUrl": ""
            }'
+
+    JSON payload example for the request:
+    ```json
+    {
+        "Files": ["Web-services/test.nc"],
+        "Commands": [
+            {
+                "command": "add_global_meta",
+                "global-attr-name": "gdex_dsid",
+                "global-attr-value": "d99ext9",
+                "debug": true
+            }
+        ],
+        "CallbackUrl": "https://gdex.ucar.edu/api/gdex-services-event/"
+    }
+    ```
     
     """
     # Generate external job ID for tracking the transform request
