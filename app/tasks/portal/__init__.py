@@ -10,6 +10,8 @@ How a portal job works, start to finish:
   3. When the job finishes, the result is POSTed to the caller's callback URL (if
      one was given) and can also be fetched from GET /celery/task-status/<id>
      (defined in app/routers/celery.py; see common.py, section 1).
+  4. Each step's progress is logged in the transform jobs' JSONL format and
+     saved to Boreas; the result's log_url points to it (see common.py, section 4).
 
 Modules:
 
@@ -24,7 +26,9 @@ Adding a new portal endpoint (see check_data.py as the example):
      write one plain function per step: step(path, report) -> (result, details).
      Raise on errors; run_step records them as FAILURE.
   2. Wrap each step in a Celery task that calls common.run_step. The first task
-     starts the report with common.new_report.
+     starts the report with common.new_report(path, steps, "<endpoint>"). The
+     last task uses @celery_app.task(bind=True) and passes external_job_id=self.request.id
+     to run_step, so the job's log is uploaded under its external_job_id.
   3. Add submit_<endpoint>(...), which chains the tasks and calls
      common.submit_portal_task. The router calls only this function.
 

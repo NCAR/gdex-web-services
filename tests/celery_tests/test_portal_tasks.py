@@ -1,6 +1,7 @@
 import asyncio
+import json
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from celery.contrib.testing.worker import start_worker
@@ -35,6 +36,22 @@ def callback_post(monkeypatch):
     monkeypatch.setenv("GDEX_SERVICES_CALLBACK_SECRET", SECRET)
     with patch("app.utils.callback.httpx.post") as post:
         yield post
+
+
+@pytest.fixture(autouse=True)
+def boreas():
+    """Stand in for the Boreas S3 client; yields put_object to inspect uploaded logs."""
+    client = MagicMock()
+    with patch("app.utils.job_log.s3_client", return_value=client):
+        yield client.put_object
+
+
+def _log_url(job_id):
+    return f"https://boreas.hpc.ucar.edu/gdex-services/services_tmp/logs/check_data.{job_id}.jsonl"
+
+
+def _uploaded_log(put_object):
+    return [json.loads(line) for line in put_object.call_args.kwargs["Body"].decode().splitlines()]
 
 
 @pytest.fixture(autouse=True)
@@ -106,6 +123,7 @@ class TestStatus:
             "status": "SUCCESS",
             "result": {
                 "path": str(data_dir),
+                "log_url": _log_url(job_id),
                 "tasks": {
                     "validate_path": _step("SUCCESS", True, details={"is_directory": True}),
                     "check_readable": _step("SUCCESS", True, details=_readable_details(2)),
@@ -132,6 +150,7 @@ class TestStatus:
         assert body["status"] == "FAILURE"
         assert body["result"] == {
             "path": "https://example.com/x",
+            "log_url": _log_url(job_id),
             "tasks": {
                 "validate_path": _step("FAILURE", error=URL_ERROR),
                 "check_readable": _step("SKIPPED"),
@@ -225,6 +244,65 @@ class TestReadability:
         assert tasks["data_size"] == _step("SKIPPED")
 
 
+class TestJobLog:
+    def _run(self, path):
+        job_id = client.get("/files/check-data", params={"path": str(path)}).json()["external_job_id"]
+        _wait(job_id)
+        return job_id, _status(job_id)["result"]
+
+    def test_log_is_uploaded_once_under_the_job_id(self, data_dir, boreas):
+        job_id, result = self._run(data_dir)
+
+        boreas.assert_called_once()
+        kwargs = boreas.call_args.kwargs
+        assert kwargs["Bucket"] == "gdex-services"
+        assert kwargs["Key"] == f"services_tmp/logs/check_data.{job_id}.jsonl"
+        assert kwargs["ACL"] == "public-read"
+        assert result["log_url"] == _log_url(job_id)
+        assert "_log" not in result
+
+    def test_log_lines_use_the_gdexws_format(self, data_dir, boreas):
+        self._run(data_dir)
+
+        lines = _uploaded_log(boreas)
+        assert [(l["command"], l["level"], l["process_message"]) for l in lines] == [
+            ("check-data", "INFO", "check-data job started"),
+            ("validate_path", "INFO", "validate_path started"),
+            ("validate_path", "INFO", "validate_path completed"),
+            ("check_readable", "INFO", "check_readable started"),
+            ("check_readable", "INFO", "check_readable completed"),
+            ("data_size", "INFO", "data_size started"),
+            ("data_size", "INFO", "data_size completed"),
+            ("check-data", "INFO", "check-data job completed"),
+        ]
+        assert all(set(l) >= {"command", "time_of_process", "level", "process_message"} for l in lines)
+        assert lines[0]["path"] == str(data_dir)
+        assert lines[6]["result"] == 8
+
+    def test_unreadable_and_failed_steps_are_logged(self, data_dir, boreas, tmp_path):
+        (data_dir / "a.nc").chmod(0o600)
+        self._run(data_dir)
+        levels = [(l["process_message"], l["level"]) for l in _uploaded_log(boreas)]
+        assert ("check_readable completed with result False", "WARNING") in levels
+        assert ("data_size skipped", "INFO") in levels
+        assert levels[-1] == ("check-data job incomplete", "WARNING")
+
+        self._run(tmp_path / "nope")
+        lines = _uploaded_log(boreas)
+        assert ("validate_path failed", "ERROR") in [(l["process_message"], l["level"]) for l in lines]
+        assert lines[-1]["process_message"] == "check-data job failed"
+        assert lines[-1]["level"] == "ERROR"
+
+    def test_failed_upload_does_not_fail_the_job(self, data_dir, boreas):
+        boreas.side_effect = RuntimeError("boreas down")
+
+        job_id, result = self._run(data_dir)
+
+        assert _status(job_id)["status"] == "SUCCESS"
+        assert result["log_url"] is None
+        assert result["tasks"]["data_size"]["result"] == 8
+
+
 class TestCallbacks:
     def test_success_posts_job_id(self, callback_post):
         job_id = client.get("/celery/test-celery", params={"callback_url": CALLBACK}).json()["external_job_id"]
@@ -253,6 +331,7 @@ class TestCallbacks:
             "status": "FAILURE",
             "result": {
                 "path": "https://example.com/x",
+                "log_url": _log_url(job_id),
                 "tasks": {
                     "validate_path": _step("FAILURE", error=URL_ERROR),
                     "check_readable": _step("SKIPPED"),
