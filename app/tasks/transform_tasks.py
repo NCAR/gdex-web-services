@@ -171,29 +171,27 @@ def jsonl_to_celery_state(entry: Dict[str, Any]) -> str:
     return STATE_PBS_PROGRESS
 
 
-def _read_complete_jsons(log_path: Path) -> tuple:
-    """Return (entries, raw): the parsed newline-terminated lines of the log, one slot per
-    line, and the exact bytes they were parsed from (for a byte-identical upload).
+def _read_complete_jsons(log_path: Path) -> list:
+    """Return the parsed newline-terminated lines of the log, one slot per line.
 
     A line the PBS job is still appending (no trailing newline) is left for the
     next poll. A blank line comes back as {"json_msg": "empty line"} and an undecodable one as
     {"json_msg": "json decode fail at line N"}, so the list length still equals the
     number of complete lines (the caller's last_line index); a corrupt line never
     heals, so it is reported once and not retried."""
-    data = log_path.read_bytes()
-    raw = data[:data.rfind(b"\n") + 1]  # up to and including the last newline
-    # raw ends with "\n" (or is empty), so split() leaves "" last
-    lines = raw.decode("utf-8", errors="replace").split("\n")[:-1]
-    entries = []
-    for number, line in enumerate(lines, start=1):
-        if not line.strip():
-            entries.append({"json_msg": "empty line"})
+    entries = log_path.read_text().split("\n")
+    # split() leaves the trailing fragment (or "" if text ends with "\n") last
+    # test all lines are json-decodable
+    json_lines = []
+    for number, jline in enumerate(entries[:-1], start=1):
+        if not jline.strip():
+            json_lines.append({"json_decode_msg": "empty line"})
             continue
         try:
-            entries.append(json.loads(line))
+            json_lines.append(json.loads(jline))
         except json.JSONDecodeError:
-            entries.append({"json_msg": f"json decode fail at line {number}"})
-    return entries, raw
+            json_lines.append({"json_decode_msg": f"json decode fail at line {number}"})
+    return json_lines
 
 
 @celery_app.task
@@ -365,22 +363,21 @@ def watch_job(self, external_job_id: str, callback_url: Optional[str] = None, la
         _reschedule_watch(self, external_job_id, callback_url, last_line, SEARCH_JSONL_INT, time.time())
 
     # Read the new log entries from the last processed line onward
-    entries, raw_log = _read_complete_jsons(log_path)
-    new_entries = entries[last_line:]
-    new_last_line = len(entries)
+    json_lines = _read_complete_jsons(log_path)
+    new_json_lines = json_lines[last_line:]
+    new_last_line = len(json_lines)
 
-    # mirror the log to Boreas (same bytes as on glade) whenever it grew. The terminal line
-    # is a new line too, so the final log is uploaded before the callback goes out.
+    # If there is new json line, re-upload the whole log to Boreas.
     # Best effort: a Boreas problem must not fail a healthy job.
-    if new_entries:
+    if new_json_lines:
         try:
-            upload_job_log(raw_log, external_job_id)
+            upload_job_log("transform", external_job_id, json_lines)
         except Exception:
             logger.exception(f"Failed to upload log to Boreas for external_job_id={external_job_id}")
 
-    # if no new entries, keep the state; only re-save it every HEARTBEAT_INT so the
+    # if no new json lines, keep the state; only re-save it every HEARTBEAT_INT so the
     # result key's TTL does not expire while the job is silent
-    if not new_entries:
+    if not new_json_lines:
         now = time.time()
         if last_refresh is None:
             last_refresh = now  # first silent poll: start the heartbeat clock
@@ -399,8 +396,8 @@ def watch_job(self, external_job_id: str, callback_url: Optional[str] = None, la
         _reschedule_watch(self, external_job_id, callback_url, last_line, READ_JSONL_INT, last_refresh)
 
     # identify terminal lines (PBS_COMPLETED or PBS_FAILED) for PBS job completion state
-    for entry in new_entries:
-        msg = entry.get("process_message")
+    for jline in new_json_lines:
+        msg = jline.get("process_message")
         if msg in (PBS_COMPLETED, PBS_FAILED):
             # Terminal line: the PBS job has finished, successfully or not
             if msg == PBS_COMPLETED:
@@ -420,7 +417,7 @@ def watch_job(self, external_job_id: str, callback_url: Optional[str] = None, la
             # which is what we report back to the callback and ultimately to the client
             # result is the JSONL line itself (command, time_of_process, level, ...)
             call_back_json = job_response(
-                task_id=external_job_id, status=job_status, result=entry,
+                task_id=external_job_id, status=job_status, result=jline,
                 job_type="transform", completed=datetime.now(timezone.utc).isoformat(),
             )
 
@@ -434,7 +431,7 @@ def watch_job(self, external_job_id: str, callback_url: Optional[str] = None, la
             raise Ignore()
 
     # only update the state with the latest entry if there are new entries
-    latest = new_entries[-1]
+    latest = new_json_lines[-1]
     self.update_state(state=jsonl_to_celery_state(latest), meta=_meta(latest))
 
     _reschedule_watch(self, external_job_id, callback_url, new_last_line, READ_JSONL_INT, time.time())
