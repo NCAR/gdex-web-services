@@ -20,7 +20,7 @@ from app.tasks.callback_task import CallbackError
 from app.tasks.portal.common import job_response
 from app.tasks.transform_tasks import celery_transform, STEP_NAMES
 from app.utils import get_dscheck_json, relpath_validate
-from app.utils.callback import ALLOWED_CALLBACK_URLs
+from app.utils.callback import ALLOWED_CALLBACK_URLS
 
 # Import RDA/GDEX libraries (rda-python-common) for database interaction and logging.
 try:
@@ -45,18 +45,18 @@ WORKDIR = str(Path('/glade/campaign/collections/gdex/data/exchange/Web-services/
 
 
 # `{cindex:int}` only matches all-digit paths, so a UUID falls through to
-# GET /status/{request_id} below instead of failing int validation here.
+# GET /status/{external_job_id} below instead of failing int validation here.
 @router.get("/status/{cindex:int}")
-async def get_status(cindex: int) -> Dict[str, Any]:
+async def get_dscheck_status(cindex: int) -> Dict[str, Any]:
     """
     Retrieve dscheck status and latest processing output for a specific cindex.
 
     Queue-level debugging tool. Clients should poll
-    GET /compose/status/{request_id} instead.
+    GET /compose/status/{external_job_id} instead.
 
     Queries the dscheck database record for the given cindex. Returns
     standardized JSON with the record's current status. For the job's own
-    processing log, see GET /compose/log/{request_id}.
+    processing log, see GET /compose/log/{external_job_id}.
 
     Parameters
     ----------
@@ -86,18 +86,18 @@ async def get_status(cindex: int) -> Dict[str, Any]:
     return get_dscheck_json(cindex)
 
 
-@router.get("/status/{request_id}")
-def get_celery_status(request_id: str) -> Dict[str, Any]:
+@router.get("/status/{external_job_id}")
+def get_celery_status(external_job_id: str) -> Dict[str, Any]:
     """
     Retrieve Redis-backed job status for a transformation job.
 
     Cheap enough to poll every few seconds. For the full step-by-step history,
-    use GET /compose/log/{request_id}; for raw dscheck-row inspection, use
+    use GET /compose/log/{external_job_id}; for raw dscheck-row inspection, use
     GET /compose/status/{cindex}.
 
     Parameters
     ----------
-    request_id : str
+    external_job_id : str
         The unique request identifier (UUID) returned by POST /compose/transform.
 
     Returns
@@ -105,55 +105,81 @@ def get_celery_status(request_id: str) -> Dict[str, Any]:
     dict
         - job_type: Always "transform"
         - external_job_id: Request identifier
-        - status: State of the watch_job task (task_id == request_id):
-          PENDING (log not written yet, or unknown/expired request_id),
-          PBS_PROGRESS, PBS_FAILURE_REPORTED (the job logged an ERROR line),
-          SUCCESS (the PBS job reached a terminal line; see result.status =
-          completed|failed, so a failed PBS job is still SUCCESS here),
-          or FAILURE (the status watcher itself broke)
-        - result: Depends on status:
-          PBS_PROGRESS / PBS_FAILURE_REPORTED: the latest JSONL log entry
-          (gdexws log_format dict);
-          SUCCESS: the final payload {job_type, external_job_id,
-          status (completed|failed), result (terminal JSONL line), completed};
-          PENDING: {"msg": "log file not written yet"}, or {"msg": null} for
-          an unknown/expired request_id;
-          FAILURE: {"msg": error string}
-        Whatever the status, result also holds these two keys:
-        - result.steps: Celery state of each tracked side task (STEP_NAMES), run as
-          task_id "{request_id}:{step}". PENDING means not started, not
-          requested (no callback_url) or expired.
-        - result.callback: {requested, status, info} for the portal callback_url.
-          requested is false when no callback_url was given (or the record expired).
-          status: NOT_REQUESTED, WAITING (job not finished yet), RETRY (portal POST
-          failed with a retryable error, backing off), SUCCESS (delivered) or
-          FAILURE (rejected with a 4xx, or retries exhausted).
-          info: {"http_status": 2xx} on SUCCESS; {"msg", "http_status"} on RETRY / FAILURE,
-          where http_status is the portal's status code (null if it was never reached);
-          null otherwise.
-          A 4xx other than 408/429 fails at once with no retry.
+        - status: State of the watch_job task (task_id == external_job_id):
+            - PENDING: log not written yet, or unknown/expired external_job_id
+            - PBS_PROGRESS
+            - PBS_FAILURE_REPORTED: the job logged an ERROR line
+            - SUCCESS: the PBS job reached a terminal line; see result.status =
+              completed|failed, so a failed PBS job is still SUCCESS here
+            - FAILURE: the status watcher itself broke
+        - result: Depends on status; whatever the status, it also holds `steps`
+          and `callback`.
+            - PBS_PROGRESS / PBS_FAILURE_REPORTED: the latest JSONL log entry
+              (gdexws log_format dict)
+            - SUCCESS: the final payload {job_type, external_job_id,
+              status (completed|failed), result (terminal JSONL line), completed}
+            - PENDING: {"msg": "log file not written yet"}, or {"msg": null} for
+              an unknown/expired external_job_id
+            - FAILURE: {"msg": error string}
+            - steps: Celery state of each tracked side task (STEP_NAMES), run as
+              task_id "{external_job_id}:{step}". PENDING means not started, not
+              requested (no callback_url) or expired.
+            - callback: {requested, status, info} for the portal callback_url.
+                - requested: false when no callback_url was given (or the record expired)
+                - status: NOT_REQUESTED, WAITING (job not finished yet), RETRY (portal
+                  POST failed with a retryable error, backing off), SUCCESS (delivered)
+                  or FAILURE (rejected with a 4xx, or retries exhausted)
+                - info: {"http_status": 2xx} on SUCCESS; {"msg", "http_status"} on
+                  RETRY / FAILURE, where http_status is the portal's status code (null
+                  if it was never reached); null otherwise.
+                  A 4xx other than 408/429 fails at once with no retry.
         - time: UTC ISO timestamp of this response
+
+    Example:
+
+    ```json
+    {
+        "external_job_id": "886c24a2-b67f-4a7d-94b0-2336dfade9bc",
+        "status": "PENDING",
+        "result": {
+            "msg": "log file not written yet",
+            "steps": {
+                "artifacts": "SUCCESS",
+                "download": "SUCCESS",
+                "qsub": "RETRY",
+                "callback-final": "WAITING"
+            },
+            "callback": {
+                "requested": true,
+                "status": "WAITING",
+                "info": null
+            }
+        },
+        "job_type": "transform",
+        "time": "2026-10-28T17:15:36.455343+00:00"
+    }
+    ```
 
     Examples
     --------
     >>> curl -X GET https://api_url/compose/status/550e8400-e29b-41d4-a716-446655440000
     """
-    worker_result = AsyncResult(request_id, app=celery_app)
+    worker_result = AsyncResult(external_job_id, app=celery_app)
     meta = worker_result.info
     # parse the latest log entry if it exists
     if isinstance(meta, dict):
         pass
     else:
         # FAILURE gives an Exception instance,
-        # An unknown request_id gives None
+        # An unknown external_job_id gives None
         meta = {"msg": str(meta) if meta else None}
 
     steps = {
-        step: AsyncResult(f"{request_id}:{step}", app=celery_app).state
+        step: AsyncResult(f"{external_job_id}:{step}", app=celery_app).state
         for step in STEP_NAMES
     }
     # a requested callback is marked WAITING at submit time, so PENDING here means none was asked for
-    callback_result = AsyncResult(f"{request_id}:callback-final", app=celery_app)
+    callback_result = AsyncResult(f"{external_job_id}:callback-final", app=celery_app)
     callback_state = callback_result.state
     callback_requested = callback_state != "PENDING"
     callback_info = callback_result.info
@@ -166,7 +192,7 @@ def get_celery_status(request_id: str) -> Dict[str, Any]:
 
     # Celery-side tasks (not the PBS job); PENDING also means not started / not requested / expired
     return job_response(
-        task_id=request_id,
+        task_id=external_job_id,
         status=worker_result.state,
         result={
             **meta,
@@ -182,12 +208,12 @@ def get_celery_status(request_id: str) -> Dict[str, Any]:
     )
 
 
-@router.get("/log/{request_id}")
-async def get_log(request_id: str, issuer: str = Query(None)) -> Dict[str, Any]:
+@router.get("/log/{external_job_id}")
+async def get_log(external_job_id: str, issuer: str = Query(None)) -> Dict[str, Any]:
     """
     Retrieve the processing log for a transformation job.
 
-    Checks if the JSONL log file exists for the given request_id. Returns three possible
+    Checks if the JSONL log file exists for the given external_job_id. Returns three possible
     responses:
     1. Log exists: returns jsonl content as a list of JSON objects
     2. Log exists but parsed failed: returns error indicating invalid JSON
@@ -195,7 +221,7 @@ async def get_log(request_id: str, issuer: str = Query(None)) -> Dict[str, Any]:
 
     Parameters
     ----------
-    request_id : str
+    external_job_id : str
         The unique request identifier (UUID) to retrieve logs for.
     issuer : str, optional
         Email or identifier of the person who initiated the request.
@@ -210,7 +236,7 @@ async def get_log(request_id: str, issuer: str = Query(None)) -> Dict[str, Any]:
     >>> curl -X GET https://api_url/compose/log/550e8400-e29b-41d4-a716-446655440000
     >>> curl -X GET "https://api_url/compose/log/550e8400-e29b-41d4-a716-446655440000?issuer=user@ucar.edu"
     """
-    log_path = Path(WORKDIR) / f"{request_id}.gdexws.jsonl"
+    log_path = Path(WORKDIR) / f"{external_job_id}.gdexws.jsonl"
 
     # Case 1: Log file exists
     if log_path.exists():
@@ -227,7 +253,7 @@ async def get_log(request_id: str, issuer: str = Query(None)) -> Dict[str, Any]:
                             log_entries.append({"error": "Invalid JSON", "raw": line})
 
             response = {
-                "request_id": request_id,
+                "external_job_id": external_job_id,
                 "log_entries": log_entries,
                 "status_message": "Log retrieved successfully"
             }
@@ -236,13 +262,13 @@ async def get_log(request_id: str, issuer: str = Query(None)) -> Dict[str, Any]:
             return response
         except Exception as e:
             return {
-                "request_id": request_id,
+                "external_job_id": external_job_id,
                 "status_message": f"Error reading log: {str(e)}"
             }
 
     # Case 2: Log not found
     return {
-        "request_id": request_id,
+        "external_job_id": external_job_id,
         "status_message": "Request log not available"
     }
 
@@ -282,8 +308,8 @@ def post_transform(
 
     Returns
     -------
-    dict
-        - request_id: Request identifier (UUID)
+    dict => this returns the external job ID to the web portal for data table lookup on AsyncTask
+        - external_job_id: Request identifier (UUID) 
         - issuer: Issuer identifier (if provided)
         - status_message: Human-readable status message
         - status_url: GET endpoint to poll for job state
@@ -305,17 +331,33 @@ def post_transform(
              ],
              "CallbackUrl": ""
            }'
+
+    JSON payload example for the request:
+    ```json
+    {
+        "Files": ["Web-services/test.nc"],
+        "Commands": [
+            {
+                "command": "add_global_meta",
+                "global-attr-name": "gdex_dsid",
+                "global-attr-value": "d99ext9",
+                "debug": true
+            }
+        ],
+        "CallbackUrl": "https://gdex.ucar.edu/api/gdex-services-event/"
+    }
+    ```
     
     """
     # Generate external job ID for tracking the transform request
-    request_id = str(uuid.uuid4())
+    external_job_id = str(uuid.uuid4())
 
     # refuse access if callback URL is provided but not in the listed allowed URL
     #  avoid using callback URL to unauthorized endpoints
     if request.callback_url == "":
         request.callback_url = None
 
-    if request.callback_url is not None and request.callback_url not in ALLOWED_CALLBACK_URLs:
+    if request.callback_url is not None and request.callback_url not in ALLOWED_CALLBACK_URLS:
         return JSONResponse(
             status_code=403,
             content={"detail": "Callback URL not allowed"}
@@ -330,23 +372,23 @@ def post_transform(
     try:
         # Queue the transform job with Celery
         # maintain the PascalCase format on key name to match the expected JSON structure that pass to the celery worker
-        celery_transform(request.model_dump(by_alias=True), request_id, specialist)
-        # Only place request_id is tied to who submitted it (not in the access log)
+        celery_transform(request.model_dump(by_alias=True), external_job_id, specialist)
+        # Only place external_job_id is tied to who submitted it (not in the access log)
         logger.info(
-            f"Transform queued external_job_id={request_id} issuer={issuer} specialist={specialist} "
+            f"Transform queued external_job_id={external_job_id} issuer={issuer} specialist={specialist} "
             f"files={len(request.files)} callback={'yes' if request.callback_url else 'no'}"
         )
     except Exception as e:
-        # Broker (Redis) unreachable — nothing was enqueued
-        logger.exception(f"Failed to queue transform request_id={request_id}")
-        raise HTTPException(status_code=503, detail=f"Failed to queue transform job: {e}") from e
+        # ex: Broker (Redis) unreachable — nothing was enqueued
+        logger.exception(f"Failed to queue transform external_job_id={external_job_id} with exception: {e}")
+        raise HTTPException(status_code=503, detail="Failed to queue transform job")
 
     return {
-        "external_job_id": request_id,
+        "external_job_id": external_job_id,
         "issuer": issuer,
         "status_message": "Transform job accepted and queued",
-        "status_url": f"/compose/status/{request_id}",
-        "log_url": f"/compose/log/{request_id}",
+        "status_url": f"/compose/status/{external_job_id}",
+        "log_url": f"/compose/log/{external_job_id}",
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 

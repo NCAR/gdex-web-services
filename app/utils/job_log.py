@@ -60,42 +60,14 @@ def log_format(command_name: str, level: str, process_message: str, **kwargs) ->
     return log_dict
 
 
-def _job_log_key(endpoint: str, external_job_id: str, prefix: str = _LOG_PREFIX) -> str:
-    """S3 key of a job's log: <prefix>/<endpoint>.<external_job_id>.jsonl.
-
-    The endpoint name is standardized for the filename: any leading "/" is
-    dropped and "-" becomes "_", so "/check-data" gives check_data.<external_job_id>.jsonl.
-    """
-    name = endpoint.strip("/").replace("-", "_")
-    return f"{prefix}/{name}.{external_job_id}.jsonl"
-
-
-def job_log_url(endpoint: str, external_job_id: str, prefix: str = _LOG_PREFIX) -> str:
-    """Public HTTPS URL of a job's log on Boreas (whether or not it's been uploaded yet).
-
-    Parameters
-    ----------
-    endpoint : str
-        Name of the endpoint that started the job, e.g. "check-data"; written
-        into the filename with "_" in place of "-" (check_data).
-    external_job_id : str
-        The job's external_job_id, used in the filename.
-    prefix : str, optional
-        S3 prefix/directory for logs. Default: "services_tmp/logs"
-
-    Returns
-    -------
-    str
-        e.g. https://boreas.hpc.ucar.edu/gdex-services/services_tmp/logs/check_data.<external_job_id>.jsonl
-    """
-    return f"{_OBJECT_STORE_ENDPOINT}/{_BUCKET}/{_job_log_key(endpoint, external_job_id, prefix)}"
-
-
 def upload_job_log(endpoint: str, external_job_id: str, json_lines: List[Dict[str, Any]], prefix: str = _LOG_PREFIX) -> str:
     """Upload a job's log lines to Boreas as JSONL, replacing any earlier upload.
 
-    Saved as <prefix>/<endpoint>.<external_job_id>.jsonl, e.g.
-    services_tmp/logs/check_data.<external_job_id>.jsonl (see _job_log_key).
+    Key of the object : <prefix>/<endpoint>.<external_job_id>.jsonl
+    e.g.
+        services_tmp/logs/check_data.<external_job_id>.jsonl
+
+    (any leading "/" on the endpoint is dropped and "-" becomes "_".)
 
     Parameters
     ----------
@@ -112,14 +84,19 @@ def upload_job_log(endpoint: str, external_job_id: str, json_lines: List[Dict[st
     Returns
     -------
     str
-        Public HTTPS URL to the uploaded log (same as job_log_url).
+        Public HTTPS URL to the uploaded log, e.g.
+        https://boreas.hpc.ucar.edu/gdex-services/services_tmp/logs/check_data.<external_job_id>.jsonl
     """
-    body = "".join(json.dumps(line) + "\n" for line in json_lines)
+    # create the S3 key for the log file
+    key = f"{prefix}/{endpoint.strip('/').replace('-', '_')}.{external_job_id}.jsonl"
+    # turn list of jsons to jsonl
+    body = "".join(json.dumps(jline) + "\n" for jline in json_lines)
+    # put object
     s3_client().put_object(
         Bucket=_BUCKET,
-        Key=_job_log_key(endpoint, external_job_id, prefix),
+        Key=key,
         Body=body.encode("utf-8"),
         ContentType="application/x-ndjson",
         ACL="public-read",
     )
-    return job_log_url(endpoint, external_job_id, prefix)
+    return f"{_OBJECT_STORE_ENDPOINT}/{_BUCKET}/{key}"
