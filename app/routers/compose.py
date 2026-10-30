@@ -20,7 +20,7 @@ from app.tasks.callback_task import CallbackError
 from app.tasks.portal.common import job_response
 from app.tasks.transform_tasks import celery_transform, STEP_NAMES
 from app.utils import get_dscheck_json, relpath_validate
-from app.utils.callback import ALLOWED_CALLBACK_URLs
+from app.utils.callback import ALLOWED_CALLBACK_URLS
 
 # Import RDA/GDEX libraries (rda-python-common) for database interaction and logging.
 try:
@@ -357,7 +357,7 @@ def post_transform(
     if request.callback_url == "":
         request.callback_url = None
 
-    if request.callback_url is not None and request.callback_url not in ALLOWED_CALLBACK_URLs:
+    if request.callback_url is not None and request.callback_url not in ALLOWED_CALLBACK_URLS:
         return JSONResponse(
             status_code=403,
             content={"detail": "Callback URL not allowed"}

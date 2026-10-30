@@ -11,6 +11,13 @@ in app/tasks/callback_task.py) send through here; each decides how to handle a f
 import os
 import httpx
 
+# Only these portal endpoints may receive the shared secret. Also checked by
+# the compose router, so a bad callback_url is rejected at request time.
+ALLOWED_CALLBACK_URLS = (
+    "https://gdex.ucar.edu/api/gdex-services-event/",
+    "https://calie.k8s.ucar.edu/api/gdex-services-event/",
+)
+
 
 def callback_to_portal(url, payload, timeout=10):
     """POST a JSON payload to a callback URL with the gdex-services shared secret.
@@ -44,12 +51,6 @@ def callback_to_portal(url, payload, timeout=10):
     KeyError
         If GDEX_SERVICES_CALLBACK_SECRET is not set.
     """
-
-    # Only these portal endpoints may receive the shared secret.
-    ALLOWED_CALLBACK_URLS = frozenset({
-        "https://gdex.ucar.edu/api/gdex-services-event/",
-        "https://calie.k8s.ucar.edu/api/gdex-services-event/",
-    })
 
     if url not in ALLOWED_CALLBACK_URLS:
         raise ValueError(f"Callback URL {url} is not allowed for portal callbacks.")

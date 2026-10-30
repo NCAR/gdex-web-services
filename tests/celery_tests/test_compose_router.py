@@ -76,7 +76,7 @@ class TestPostTransform:
         assert body["result"]["callback"] == {"requested": False, "status": "NOT_REQUESTED", "info": None}
 
     def test_callback_sent_with_tracked_task_id(self, mock_pipeline):
-        url = compose.ALLOWED_CALLBACK_URLs[0]
+        url = compose.ALLOWED_CALLBACK_URLS[0]
         resp = client.post("/compose/transform", json={**PAYLOAD, "CallbackUrl": url})
         assert resp.status_code == 200
         rid = resp.json()["external_job_id"]
@@ -101,7 +101,7 @@ class TestPostTransform:
         err = {"status_message": "Access denied: 'x' escapes base directory"}
         with patch.object(compose, "relpath_validate", return_value=err), \
              patch.object(compose, "celery_transform") as transform:
-            resp = client.post("/compose/transform", json={**PAYLOAD, "CallbackUrl": compose.ALLOWED_CALLBACK_URLs[0]})
+            resp = client.post("/compose/transform", json={**PAYLOAD, "CallbackUrl": compose.ALLOWED_CALLBACK_URLS[0]})
         assert resp.status_code == 403
         assert resp.json() == err
         transform.assert_not_called()
