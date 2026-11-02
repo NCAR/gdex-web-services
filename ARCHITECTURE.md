@@ -43,7 +43,8 @@ flowchart TD
     REDIS --> WJ
     REDIS --> PC
 
-    TC --> BOREAS[("Boreas object store<br/>transform.payload.{request_id}.json<br/>transform.{request_id}.pbs<br/>services_tmp/logs/check_data.{id}.jsonl")]
+    TC --> BOREAS[("Boreas object store<br/>transform.payload.{external_job_id}.json<br/>transform.{external_job_id}.pbs<br/>services_tmp/logs/transform.{id}.jsonl<br/>services_tmp/logs/check_data.{id}.jsonl")]
+    WJ -->|"log copy"| BOREAS
     PC -->|"job log"| BOREAS
     PC -->|"read / stat"| GLADE
     TC --> Q[("dscheck queue<br/>Postgres, via PgDBI")]
@@ -53,17 +54,17 @@ flowchart TD
     GLADE_READ -->|"direct read<br/>(no PBS)"| GLADE[("Glade storage<br/>campaign data")]
 
     subgraph HPC["NCAR HPC — PBS / Casper"]
-        C["curl downloads<br/>transform.{request_id}.pbs"] --> S["qsub submits the job"]
+        C["curl downloads<br/>transform.{external_job_id}.pbs"] --> S["qsub submits the job"]
         S --> J["PBS job starts:<br/>activates the gdexws<br/>Python venv"]
         J --> T["gdexws transform -p PAYLOAD_URL<br/>gdexws/composers/transform.py"]
         T -->|"direct HTTPS read"| BOREAS
         T --> LOOP["for each file, for each command<br/>(strict serial order)"]
         LOOP --> TOOL["gdexws CLI tool<br/>e.g. add-global-meta<br/>gdexws/tools/*.py"]
-        TOOL --> LOG[("{request_id}.gdexws.jsonl<br/>/glade campaign store")]
+        TOOL --> LOG[("{external_job_id}.gdexws.jsonl<br/>/glade campaign store")]
     end
 
     LOG -.->|"tailed by"| WJ
-    LOG -.->|"read by"| ST["GET /compose/log/{request_id}<br/>routers/compose.py"]
+    LOG -.->|"read by"| ST["GET /compose/log/{external_job_id}<br/>routers/compose.py"]
     CB -->|"POST callback_url"| PORTAL["gdex-web-portal"]
 ```
 
@@ -72,17 +73,21 @@ flowchart TD
 A curation task (e.g. "add a global attribute to this NetCDF file") crosses four execution boundaries: the API pod, the Celery worker pod, the GDEX job queue (`dscheck` / Postgres), and NCAR HPC (PBS/Casper). Neither pod touches the data files — the worker only builds a payload + PBS script and hands execution to HPC via `dscheck`.
 
 1. **User submits a curation task** as a single JSON request — a list of relative `Files`, a list of `Commands` (each a `command` name and its parameters), and an optional `CallbackUrl` — validated against the `TransformRequest` schema.
-2. **API pod accepts the request** at `POST /compose/transform`: it rejects file paths that escape the exchange directory and callback URLs not on the allowed list, generates a `request_id` (UUID) used to name every artifact for this job, and calls `celery_transform`, which queues the work and returns. The response carries `external_job_id` (the `request_id`), `status_url` and `log_url`.
-3. **Worker builds and dispatches the job** as a chain of Celery tasks (`app/tasks/transform_tasks.py`), each run under task id `{request_id}:{step}`:
-   - `artifacts` (`create_boreas_artifacts`): serializes the request to a JSON payload, templates a PBS script around it, and uploads both to the Boreas object store (S3-compatible), keyed by `request_id`, so the HPC side only ever needs a URL.
+2. **API pod accepts the request** at `POST /compose/transform`: it rejects file paths that escape the exchange directory and callback URLs not in `ALLOWED_CALLBACK_URLS` (`app/utils/callback.py`), generates an `external_job_id` (UUID) used to name every artifact for this job, and calls `celery_transform`, which queues the work and returns. The response carries `external_job_id`, `status_url` and `log_url`.
+3. **Worker builds and dispatches the job** as a chain of Celery tasks (`app/tasks/transform_tasks.py`), each run under task id `{external_job_id}:{step}`:
+   - `artifacts` (`create_boreas_artifacts`): serializes the request to a JSON payload, templates a PBS script around it, and uploads both to the Boreas object store (S3-compatible), keyed by `external_job_id`, so the HPC side only ever needs a URL.
    - `download` (`add_dscheck_download`): inserts the `dscheck` row (via `rda_python_common`) that has HPC `curl` the PBS script.
    - `qsub` (`add_dscheck_qsub`): re-queues itself until the downloaded script exists on `/glade` (avoiding a race), then inserts the `qsub` row.
    Each step retries on its own and is safe to redeliver. If a step fails for good, `chain_failed` marks the request FAILURE and sends the callback.
 4. **HPC executes the job**: once `dscheck` runs the queued `qsub`, PBS starts the job, which activates the `gdexws` virtualenv already installed on HPC and runs `gdexws transform -p <payload_url>`, reading the payload directly from its Boreas URL — no shared filesystem hand-off is needed between the pods and HPC.
-5. **`transform` runs the payload serially**: for each file, for each command (in the order given), it shells out to the corresponding `gdexws` CLI tool. Any non-zero exit aborts the job. Every step — including PBS shell start/end markers — is appended as one JSON line to `{request_id}.gdexws.jsonl` on the shared `/glade` campaign store.
-6. **Worker tracks the job and reports back**: `watch_job`, started alongside the chain under task id `request_id`, tails that JSONL file, mirrors the latest line into its Celery state, and re-schedules itself until the job reaches a terminal line. Then, if a callback URL was given, `notify_callback` POSTs the final result to the portal (with retries; its outcome is recorded under `{request_id}:callback-final`).
+5. **`transform` runs the payload serially**: for each file, for each command (in the order given), it shells out to the corresponding `gdexws` CLI tool. Any non-zero exit aborts the job. Every step — including PBS shell start/end markers — is appended as one JSON line to `{external_job_id}.gdexws.jsonl` on the shared `/glade` campaign store.
+6. **Worker tracks the job and reports back**: `watch_job`, started alongside the chain under task id `external_job_id`, re-schedules itself on each poll until the job ends. Each poll it:
+   - checks that the job's `qsub` row still exists in `dscheck`; a missing row means the PBS job is gone (e.g. cancelled), which is reported as `PBS_FAILURE_REPORTED`;
+   - tails that JSONL file and mirrors the latest line into its Celery state (`PBS_PROGRESS`, or `PBS_FAILURE_REPORTED` for an `ERROR` line);
+   - re-uploads the whole log to Boreas at `services_tmp/logs/transform.<external_job_id>.jsonl` when there are new lines (best effort; an upload failure doesn't fail the job).
+   On a terminal line it sets `SUCCESS` (job completed) or `PBS_FAILURE_REPORTED` (job failed); `FAILURE` is kept for a broken worker or chain step. Then, if a callback URL was given, `notify_callback` POSTs the final result to the portal (with retries; its outcome is recorded under `{external_job_id}:callback-final`).
 
-Status endpoints: `GET /compose/status/{request_id}` reads the Celery state (job progress, each chain step, the callback); `GET /compose/log/{request_id}` returns the full JSONL log; `GET /compose/status/{cindex}` reports a single `dscheck` record.
+Status endpoints: `GET /compose/status/{external_job_id}` reads the Celery state (job progress, each chain step, the callback); `GET /compose/log/{external_job_id}` returns the full JSONL log from `/glade`; `GET /compose/status/{cindex}` reports a single `dscheck` record.
 
 ### 1.2 Portal jobs
 
@@ -123,7 +128,7 @@ app/
     ├── payload.py          #   builds + uploads the transform JSON payload
     ├── pbs.py              #   templates + uploads the PBS job script
     ├── callback.py         #   POSTs a result to the portal with the shared secret
-    ├── job_log.py          #   portal job logs: JSONL log_format + upload to Boreas
+    ├── job_log.py          #   job logs: JSONL log_format + upload to Boreas (transform and portal)
     ├── dscheck_json.py     #   reads dscheck records + tails job JSONL logs into a standard response shape
     └── file_validation.py  #   relative-path containment check (defense against path traversal)
 ```
@@ -135,7 +140,7 @@ app/
 | `routers/` | Parse HTTP requests, call a submit function or `utils/`, shape HTTP responses. Routers that start jobs know only the submit function (`celery_transform`, `submit_check_data`), not the steps or Celery chains behind it. | `schemas/`, `utils/`, `tasks/` (submit functions only) |
 | `schemas/` | Define and validate the wire format (`TransformRequest`/`Command`). Rejects absolute paths and `..` traversal before any handler logic runs. | — |
 | `tasks/` | The work that runs in the worker: building chains, retries, tracking job state in Redis, and callbacks. `transform_tasks.py` is the only place that writes to `dscheck`. | `schemas/`, `utils/` |
-| `utils/` | Each module owns exactly one external integration: Boreas/S3 (`boreas.py`), payload construction (`payload.py`), PBS script construction (`pbs.py`), the portal callback (`callback.py`), portal job logs (`job_log.py`), or `dscheck`/log status (`dscheck_json.py`). | `schemas/` (payload only) |
+| `utils/` | Each module owns exactly one external integration: Boreas/S3 (`boreas.py`), payload construction (`payload.py`), PBS script construction (`pbs.py`), the portal callback (`callback.py`), job logs on Boreas (`job_log.py`), or `dscheck`/log status (`dscheck_json.py`). | `schemas/` (payload only) |
 
 Writing to `dscheck` (via `rda_python_common`'s `PgDBI`/`PgLOG`) lives in `tasks/transform_tasks.py`, not in `utils/`: deciding *when* to enqueue each step is a job-orchestration concern, while `utils/` only knows how to *build* the artifacts a job needs. `routers/compose.py` only reads `dscheck`, for `GET /compose/status/{cindex}`.
 
@@ -173,8 +178,8 @@ gdexws/
 ## 4. Cross-cutting notes
 
 - **Path validation is duplicated on purpose.** `app/utils/file_validation.py` (API server) and `gdexws/utils/file_validation.py` (HPC) implement the same relative-path containment check independently, in two different processes/environments. The API layer validates early (fail fast, before any HPC resources are spent); `gdexws` re-validates at execution time because it is the component actually opening files, and it must not trust an upstream payload (e.g. a hand-crafted one, or a URL) it didn't itself construct.
-- **Job identifiers.** A transform's `request_id` (UUID, returned as `external_job_id`) is minted by the API before anything is queued. It names the payload/PBS/log artifacts, is the Celery task id of `watch_job`, and prefixes the chain's task ids (`{request_id}:artifacts`, etc.). `dscheck` then assigns its own integer `cindex` per queued step (download, submit). A portal job's `external_job_id` is the Celery task id of the last task in its chain. Clients poll a transform with `GET /compose/status/{request_id}` (Celery state), `GET /compose/log/{request_id}` (the job's own JSONL), or `GET /compose/status/{cindex}` (one `dscheck` record), and a portal job with `GET /celery/task-status/{external_job_id}`.
-- **One JSONL log format, two places.** `gdexws/utils/logging.py` (`service_log`/`log_format`) defines the *JSONL line format* — `command`, `time_of_process`, `level`, `process_message`, plus free-form kwargs — one line per log call. Transform jobs append it on HPC to `{request_id}.gdexws.jsonl` on `/glade`. Portal jobs write the same format from the worker using a copy of `log_format` in `app/utils/job_log.py` (the worker image doesn't install `gdexws`; keep the two in step), and upload the finished log to Boreas instead of `/glade`.
-- **Logs vs. status envelopes.** `app/utils/dscheck_json.py` (`get_dscheck_json`) defines an unrelated *API status envelope* — `cindex`, `time_of_status`, `command`, `argv`, `specialist`, `issuer`, `status_message` — built entirely from the `dscheck` DB record, with no read of the JSONL file. Celery-backed responses (`GET /compose/status/{request_id}`, `GET /celery/task-status/{id}`, and every callback) share the envelope `{"external_job_id", "status", "result"}` built by `job_response` in `app/tasks/portal/common.py`; transform responses add fields such as `job_type`.
-- **Callbacks.** Both kinds of job POST their final result to the caller's `callback_url` through `app/utils/callback.py`, which adds the shared secret the portal's receiver requires. Transform callbacks (`notify_callback`) retry with backoff and record their outcome in Redis; portal job callbacks are sent once and a rejection is only printed to the worker log.
+- **Job identifiers.** A transform's `external_job_id` (UUID) is minted by the API before anything is queued (`utils/payload.py` and `utils/pbs.py` still call it `request_id`). It names the payload/PBS/log artifacts, is the Celery task id of `watch_job`, and prefixes the chain's task ids (`{external_job_id}:artifacts`, etc.). `dscheck` then assigns its own integer `cindex` per queued step (download, submit). A portal job's `external_job_id` is the Celery task id of the last task in its chain. Clients poll a transform with `GET /compose/status/{external_job_id}` (Celery state), `GET /compose/log/{external_job_id}` (the job's own JSONL), or `GET /compose/status/{cindex}` (one `dscheck` record), and a portal job with `GET /celery/task-status/{external_job_id}`.
+- **One JSONL log format, on Boreas for every job.** `gdexws/utils/logging.py` (`service_log`/`log_format`) defines the *JSONL line format* — `command`, `time_of_process`, `level`, `process_message`, plus free-form kwargs — one line per log call. Transform jobs append it on HPC to `{external_job_id}.gdexws.jsonl` on `/glade`, and `watch_job` copies that file to Boreas as it grows. Portal jobs write the same format from the worker using a copy of `log_format` in `app/utils/job_log.py` (the worker image doesn't install `gdexws`; keep the two in step), and upload the finished log to Boreas only. Both go through `upload_job_log` to `services_tmp/logs/<endpoint>.<external_job_id>.jsonl` (`transform.<id>.jsonl`, `check_data.<id>.jsonl`).
+- **Logs vs. status envelopes.** `app/utils/dscheck_json.py` (`get_dscheck_json`) defines an unrelated *API status envelope* — `cindex`, `time_of_status`, `command`, `argv`, `specialist`, `issuer`, `status_message` — built entirely from the `dscheck` DB record, with no read of the JSONL file. Celery-backed responses (`GET /compose/status/{external_job_id}`, `GET /celery/task-status/{id}`, and every callback) share the envelope `{"external_job_id", "status", "result"}` built by `job_response` in `app/tasks/portal/common.py`; transform responses add fields such as `job_type`.
+- **Callbacks.** Both kinds of job POST their final result to the caller's `callback_url` through `app/utils/callback.py`, which only sends to URLs in `ALLOWED_CALLBACK_URLS` and adds the shared secret the portal's receiver requires. Transform callbacks (`notify_callback`) retry with backoff and record their outcome in Redis; portal job callbacks are sent once and a rejection is only printed to the worker log.
 - **Redis must persist.** Scheduled retries and `watch_job`'s re-polls live in Redis, so it runs with persistence (appendonly) enabled. Celery names tasks by module path, so move or rename a task only between deploys, not while jobs are queued.
