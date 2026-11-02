@@ -14,8 +14,8 @@ import httpx
 # Only these portal endpoints may receive the shared secret. Also checked by
 # the compose router, so a bad callback_url is rejected at request time.
 ALLOWED_CALLBACK_URLS = (
-    "https://gdex.ucar.edu/api/gdex-services-event/",
-    "https://calie.k8s.ucar.edu/api/gdex-services-event/",
+    "https://gdex.ucar.edu/submitportal/gdex-services-event/",
+    "https://calie.k8s.ucar.edu/submitportal/gdex-services-event/",
 )
 
 
