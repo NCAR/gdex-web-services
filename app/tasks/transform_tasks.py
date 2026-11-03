@@ -89,10 +89,10 @@ def _add_dscheck_row(record: dict) -> int:
     rejected insert means this request's row was added by an earlier run of
     the same task (e.g. redelivered after a worker died before acking). Reusing
     that row's cindex makes the insert safe to repeat. The record must carry command,
-    argv and qoption; the lookup matches all three, e.g.
+    argv and qoptions; the lookup matches all three, e.g.
         command = 'qsub' AND 
         argv = '-v REQUEST_ID transform.rid.pbs' AND 
-        qoption = '-l walltime=00:05:00,select=1:ncpus=1:mem=1gb'
+        qoptions = '-l walltime=00:05:00,select=1:ncpus=1:mem=1gb'
 
     Returns 0 if the insert failed and no matching row exists.
     """
@@ -100,7 +100,7 @@ def _add_dscheck_row(record: dict) -> int:
     cindex = db.pgadd("dscheck", record, DSCHECK_LOGACT | PgLOG.AUTOID | PgLOG.DODFLT)
     if cindex and cindex > 0:
         return cindex
-    condition = " AND ".join(f"{col} = {_sql_str(record[col])}" for col in ("command", "argv", "qoption"))
+    condition = " AND ".join(f"{col} = {_sql_str(record[col])}" for col in ("command", "argv", "qoptions"))
     existing = db.pgget("dscheck", "cindex", condition, DSCHECK_LOGACT)
     return existing.get("cindex", 0) if existing else 0
 
@@ -146,7 +146,7 @@ def add_dscheck_download(self, artifacts: dict, specialist: str) -> dict:
         "environments": f"DOWNLOAD_URL={artifacts['pbs_url']}",
         "workdir": WORKDIR,
         # force curl to have a timeout and resource limits
-        "qoption": "-l walltime=00:01:00,select=1:ncpus=1:mem=1gb"
+        "qoptions": "-l walltime=00:01:00,select=1:ncpus=1:mem=1gb"
     }
     cindex_download = _add_dscheck_row(dict_dscheck_post)
     if cindex_download <= 0:
@@ -178,7 +178,7 @@ def add_dscheck_qsub(self, prev: dict) -> dict:
         "argv": f"-v REQUEST_ID transform.{external_job_id}.pbs",
         "environments": f"REQUEST_ID={external_job_id}",
         "workdir": WORKDIR,
-        "qoption": "-l walltime=24:00:00,select=1:ncpus=1:mem=8gb"
+        "qoptions": "-l walltime=24:00:00,select=1:ncpus=1:mem=8gb"
     }
     cindex_submit = _add_dscheck_row(dict_dscheck_post)
     if cindex_submit <= 0:
