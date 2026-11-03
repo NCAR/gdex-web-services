@@ -142,7 +142,8 @@ def add_dscheck_download(self, artifacts: dict, specialist: str) -> dict:
         "command": "curl",
         "specialist": specialist,
         # Download PBS script and save locally as: transform.{external_job_id}.pbs
-        "argv": f'-fsSL --connect-timeout 5 --m 60 --retry 3 -o transform.{external_job_id}.pbs "$DOWNLOAD_URL"',
+        # dscheck.argv is varchar(100): with a 36-char job id this is 91 chars, keep it short
+        "argv": f'-fsSL -m 60 --retry 3 -o transform.{external_job_id}.pbs "$DOWNLOAD_URL"',
         "environments": f"DOWNLOAD_URL={artifacts['pbs_url']}",
         "workdir": WORKDIR,
         # force curl to have a timeout and resource limits

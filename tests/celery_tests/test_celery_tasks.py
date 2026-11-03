@@ -1,5 +1,6 @@
 import json
 import time
+import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -82,6 +83,13 @@ class TestSubmitDscheckDownload:
         assert row["environments"] == "DOWNLOAD_URL=https://b/x.pbs"
         assert row["qoptions"].startswith("-l walltime=")
 
+    def test_argv_fits_dscheck_column_with_a_real_job_id(self, mock_db):
+        # dscheck.argv is varchar(100); a UUID job id is 36 chars, so check with a real-length one
+        rid = str(uuid.uuid4())
+        artifacts = {"external_job_id": rid, "payload_url": "p", "pbs_url": "u"}
+        transform_tasks.add_dscheck_download.apply(args=[artifacts, "chiaweih"]).get()
+        assert len(mock_db.pgadd.call_args.args[1]["argv"]) <= 100
+
     def test_never_exits_worker_process(self, mock_db):
         artifacts = {"external_job_id": "rid", "payload_url": "p", "pbs_url": "u"}
         transform_tasks.add_dscheck_download.apply(args=[artifacts, "chiaweih"]).get()
@@ -151,6 +159,13 @@ class TestWaitForScriptAndSubmitQsub:
         assert row["environments"] == "REQUEST_ID=rid"
         assert row["workdir"] == str(workdir)
         assert row["qoptions"].startswith("-l walltime=")
+
+    def test_qsub_argv_fits_dscheck_column_with_a_real_job_id(self, workdir, mock_db):
+        rid = str(uuid.uuid4())
+        (workdir / f"transform.{rid}.pbs").write_text("#!/bin/bash")
+        prev = {"external_job_id": rid, "specialist": "chiaweih"}
+        transform_tasks.add_dscheck_qsub.apply(args=[prev]).get()
+        assert len(mock_db.pgadd.call_args.args[1]["argv"]) <= 100
 
     def test_duplicate_qsub_row_reuses_existing_cindex(self, workdir, mock_db):
         (workdir / "transform.rid.pbs").write_text("#!/bin/bash")
