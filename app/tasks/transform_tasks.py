@@ -65,7 +65,20 @@ DSCHECK_LOGACT = PgLOG.LOGERR
 
 
 def _sql_str(value: str) -> str:
-    """Quote a value as a SQL string literal (pgget takes a raw condition string)."""
+    """Quote a value as a SQL string literal (pgget takes a raw condition string).
+
+    Wraps the value in single quotes and doubles any single quote inside it, so the
+    value cannot end the string early.
+
+    Examples
+    --------
+    >>> _sql_str("qsub")
+    "'qsub'"
+    >>> _sql_str("-v REQUEST_ID transform.rid.pbs")
+    "'-v REQUEST_ID transform.rid.pbs'"
+    >>> _sql_str("it's")
+    "'it''s'"
+    """
     return "'" + value.replace("'", "''") + "'"
 
 
@@ -75,7 +88,11 @@ def _add_dscheck_row(record: dict) -> int:
     dscheck is unique on (command, argv), and argv embeds external_job_id, so a
     rejected insert means this request's row was added by an earlier run of
     the same task (e.g. redelivered after a worker died before acking). Reusing
-    that row's cindex makes the insert safe to repeat.
+    that row's cindex makes the insert safe to repeat. The record must carry command,
+    argv and qoption; the lookup matches all three, e.g.
+        command = 'qsub' AND 
+        argv = '-v REQUEST_ID transform.rid.pbs' AND 
+        qoption = '-l walltime=00:05:00,select=1:ncpus=1:mem=1gb'
 
     Returns 0 if the insert failed and no matching row exists.
     """
@@ -83,7 +100,7 @@ def _add_dscheck_row(record: dict) -> int:
     cindex = db.pgadd("dscheck", record, DSCHECK_LOGACT | PgLOG.AUTOID | PgLOG.DODFLT)
     if cindex and cindex > 0:
         return cindex
-    condition = f"command = {_sql_str(record['command'])} AND argv = {_sql_str(record['argv'])}"
+    condition = " AND ".join(f"{col} = {_sql_str(record[col])}" for col in ("command", "argv", "qoption"))
     existing = db.pgget("dscheck", "cindex", condition, DSCHECK_LOGACT)
     return existing.get("cindex", 0) if existing else 0
 
@@ -125,9 +142,11 @@ def add_dscheck_download(self, artifacts: dict, specialist: str) -> dict:
         "command": "curl",
         "specialist": specialist,
         # Download PBS script and save locally as: transform.{external_job_id}.pbs
-        "argv": f'-o transform.{external_job_id}.pbs "$DOWNLOAD_URL"',
+        "argv": f'-fsSL --connect-timeout 5 --m 60 --retry 3 -o transform.{external_job_id}.pbs "$DOWNLOAD_URL"',
         "environments": f"DOWNLOAD_URL={artifacts['pbs_url']}",
         "workdir": WORKDIR,
+        # force curl to have a timeout and resource limits
+        "qoption": "-l walltime=00:01:00,select=1:ncpus=1:mem=1gb"
     }
     cindex_download = _add_dscheck_row(dict_dscheck_post)
     if cindex_download <= 0:
@@ -142,6 +161,8 @@ def add_dscheck_qsub(self, prev: dict) -> dict:
     Same ~3-minute timeout (18 retries * 10s), but each wait is a re-queue rather than a worker
     sleeping, and it survives a worker restart. Safe to redeliver, same as
     add_dscheck_download.
+
+    TODO: hardcode the resource limits for qsub; consider making them configurable
     """
 
     # retry till the PBS script is downloaded
@@ -157,6 +178,7 @@ def add_dscheck_qsub(self, prev: dict) -> dict:
         "argv": f"-v REQUEST_ID transform.{external_job_id}.pbs",
         "environments": f"REQUEST_ID={external_job_id}",
         "workdir": WORKDIR,
+        "qoption": "-l walltime=24:00:00,select=1:ncpus=1:mem=8gb"
     }
     cindex_submit = _add_dscheck_row(dict_dscheck_post)
     if cindex_submit <= 0:

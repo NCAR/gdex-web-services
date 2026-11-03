@@ -109,6 +109,31 @@ class TestSubmitDscheckDownload:
         assert mock_db.pgadd.call_count == 1 + transform_tasks.add_dscheck_download.max_retries
 
 
+class TestAddDscheckRowLookup:
+    RECORD = {
+        "command": "qsub",
+        "argv": "-v REQUEST_ID transform.rid.pbs",
+        "qoption": "-l walltime=00:05:00,select=1:ncpus=1:mem=1gb",
+    }
+
+    def test_lookup_matches_command_argv_and_qoption(self, mock_db):
+        mock_db.pgadd.return_value = 0
+        mock_db.pgget.return_value = {"cindex": 5}
+
+        assert transform_tasks._add_dscheck_row(self.RECORD) == 5
+        assert mock_db.pgget.call_args.args[2] == (
+            "command = 'qsub' AND argv = '-v REQUEST_ID transform.rid.pbs' "
+            "AND qoption = '-l walltime=00:05:00,select=1:ncpus=1:mem=1gb'"
+        )
+
+    def test_record_without_qoption_is_rejected(self, mock_db):
+        mock_db.pgadd.return_value = 0
+        record = {k: v for k, v in self.RECORD.items() if k != "qoption"}
+
+        with pytest.raises(KeyError, match="qoption"):
+            transform_tasks._add_dscheck_row(record)
+
+
 class TestWaitForScriptAndSubmitQsub:
     def test_submits_qsub_when_script_exists(self, workdir, mock_db):
         (workdir / "transform.rid.pbs").write_text("#!/bin/bash")
