@@ -62,7 +62,7 @@ class TestBuildAndUploadArtifacts:
              patch.object(transform_tasks, "create_pbs_script", return_value="https://b/x.pbs") as pbs:
             result = transform_tasks.create_boreas_artifacts.apply(args=[REQUEST_DICT, "rid"]).get()
 
-        assert result == {"request_id": "rid", "payload_url": "https://b/payload.json", "pbs_url": "https://b/x.pbs"}
+        assert result == {"external_job_id": "rid", "payload_url": "https://b/payload.json", "pbs_url": "https://b/x.pbs"}
         request = payload.call_args.args[0]
         assert request.files == ["Web-services/test.nc"]
         assert request.commands[0].model_dump()["global-attr-name"] == "gdex_dsid"
@@ -71,18 +71,19 @@ class TestBuildAndUploadArtifacts:
 
 class TestSubmitDscheckDownload:
     def test_inserts_curl_row(self, mock_db):
-        artifacts = {"request_id": "rid", "payload_url": "p", "pbs_url": "https://b/x.pbs"}
+        artifacts = {"external_job_id": "rid", "payload_url": "p", "pbs_url": "https://b/x.pbs"}
         result = transform_tasks.add_dscheck_download.apply(args=[artifacts, "chiaweih"]).get()
 
         assert result["cindex_download"] == 1234
         assert result["specialist"] == "chiaweih"
         row = mock_db.pgadd.call_args.args[1]
         assert row["command"] == "curl"
-        assert row["argv"] == '-o transform.rid.pbs "$DOWNLOAD_URL"'
+        assert row["argv"].endswith('-o transform.rid.pbs "$DOWNLOAD_URL"')
         assert row["environments"] == "DOWNLOAD_URL=https://b/x.pbs"
+        assert row["qoptions"].startswith("-l walltime=")
 
     def test_never_exits_worker_process(self, mock_db):
-        artifacts = {"request_id": "rid", "payload_url": "p", "pbs_url": "u"}
+        artifacts = {"external_job_id": "rid", "payload_url": "p", "pbs_url": "u"}
         transform_tasks.add_dscheck_download.apply(args=[artifacts, "chiaweih"]).get()
         logact = mock_db.pgadd.call_args.args[2]
         assert not logact & transform_tasks.PgLOG.EXITLG
@@ -91,18 +92,21 @@ class TestSubmitDscheckDownload:
         # Redelivery: dscheck rejects the (command, argv) duplicate, the row from the first run is found
         mock_db.pgadd.return_value = 0
         mock_db.pgget.return_value = {"cindex": 999}
-        artifacts = {"request_id": "rid", "payload_url": "p", "pbs_url": "u"}
+        artifacts = {"external_job_id": "rid", "payload_url": "p", "pbs_url": "u"}
         result = transform_tasks.add_dscheck_download.apply(args=[artifacts, "chiaweih"]).get()
 
         assert result["cindex_download"] == 999
         mock_db.pgadd.assert_called_once()
+        row = mock_db.pgadd.call_args.args[1]
         condition = mock_db.pgget.call_args.args[2]
-        assert condition == """command = 'curl' AND argv = '-o transform.rid.pbs "$DOWNLOAD_URL"'"""
+        assert condition == (
+            f"command = 'curl' AND argv = '{row['argv']}' AND qoptions = '{row['qoptions']}'"
+        )
 
     def test_invalid_cindex_retries_then_fails(self, mock_db):
         mock_db.pgadd.return_value = 0
         mock_db.pgget.return_value = {}
-        artifacts = {"request_id": "rid", "payload_url": "p", "pbs_url": "u"}
+        artifacts = {"external_job_id": "rid", "payload_url": "p", "pbs_url": "u"}
         result = transform_tasks.add_dscheck_download.apply(args=[artifacts, "chiaweih"])
         assert result.state == "FAILURE"
         # 1 initial attempt + max_retries
@@ -113,31 +117,31 @@ class TestAddDscheckRowLookup:
     RECORD = {
         "command": "qsub",
         "argv": "-v REQUEST_ID transform.rid.pbs",
-        "qoption": "-l walltime=00:05:00,select=1:ncpus=1:mem=1gb",
+        "qoptions": "-l walltime=00:05:00,select=1:ncpus=1:mem=1gb",
     }
 
-    def test_lookup_matches_command_argv_and_qoption(self, mock_db):
+    def test_lookup_matches_command_argv_and_qoptions(self, mock_db):
         mock_db.pgadd.return_value = 0
         mock_db.pgget.return_value = {"cindex": 5}
 
         assert transform_tasks._add_dscheck_row(self.RECORD) == 5
         assert mock_db.pgget.call_args.args[2] == (
             "command = 'qsub' AND argv = '-v REQUEST_ID transform.rid.pbs' "
-            "AND qoption = '-l walltime=00:05:00,select=1:ncpus=1:mem=1gb'"
+            "AND qoptions = '-l walltime=00:05:00,select=1:ncpus=1:mem=1gb'"
         )
 
-    def test_record_without_qoption_is_rejected(self, mock_db):
+    def test_record_without_qoptions_is_rejected(self, mock_db):
         mock_db.pgadd.return_value = 0
-        record = {k: v for k, v in self.RECORD.items() if k != "qoption"}
+        record = {k: v for k, v in self.RECORD.items() if k != "qoptions"}
 
-        with pytest.raises(KeyError, match="qoption"):
+        with pytest.raises(KeyError, match="qoptions"):
             transform_tasks._add_dscheck_row(record)
 
 
 class TestWaitForScriptAndSubmitQsub:
     def test_submits_qsub_when_script_exists(self, workdir, mock_db):
         (workdir / "transform.rid.pbs").write_text("#!/bin/bash")
-        prev = {"request_id": "rid", "specialist": "chiaweih"}
+        prev = {"external_job_id": "rid", "specialist": "chiaweih"}
         result = transform_tasks.add_dscheck_qsub.apply(args=[prev]).get()
 
         assert result["cindex_submit"] == 1234
@@ -146,19 +150,23 @@ class TestWaitForScriptAndSubmitQsub:
         assert row["argv"] == "-v REQUEST_ID transform.rid.pbs"
         assert row["environments"] == "REQUEST_ID=rid"
         assert row["workdir"] == str(workdir)
+        assert row["qoptions"].startswith("-l walltime=")
 
     def test_duplicate_qsub_row_reuses_existing_cindex(self, workdir, mock_db):
         (workdir / "transform.rid.pbs").write_text("#!/bin/bash")
         mock_db.pgadd.return_value = 0
         mock_db.pgget.return_value = {"cindex": 888}
-        prev = {"request_id": "rid", "specialist": "chiaweih"}
+        prev = {"external_job_id": "rid", "specialist": "chiaweih"}
         result = transform_tasks.add_dscheck_qsub.apply(args=[prev]).get()
 
         assert result["cindex_submit"] == 888
-        assert mock_db.pgget.call_args.args[2] == "command = 'qsub' AND argv = '-v REQUEST_ID transform.rid.pbs'"
+        row = mock_db.pgadd.call_args.args[1]
+        assert mock_db.pgget.call_args.args[2] == (
+            f"command = 'qsub' AND argv = '-v REQUEST_ID transform.rid.pbs' AND qoptions = '{row['qoptions']}'"
+        )
 
     def test_missing_script_retries_without_submitting(self, workdir, mock_db):
-        prev = {"request_id": "rid", "specialist": "chiaweih"}
+        prev = {"external_job_id": "rid", "specialist": "chiaweih"}
         result = transform_tasks.add_dscheck_qsub.apply(args=[prev])
         assert result.state == "FAILURE"
         mock_db.pgadd.assert_not_called()
@@ -292,10 +300,17 @@ class TestWatchJob:
         notify.assert_not_called()
         assert AsyncResult("rid-n", app=celery_app).state == "FAILURE"
 
-    def test_bad_json_is_watcher_failure(self, workdir):
+    def test_bad_json_line_is_reported_not_fatal(self, workdir):
+        # a corrupt line is reported once as a progress entry and the watcher keeps polling
         (workdir / "rid-8.gdexws.jsonl").write_text("not json\n")
-        result = transform_tasks.watch_job.apply(args=["rid-8"], task_id="rid-8")
-        assert result.state == "FAILURE"
+        with patch.object(transform_tasks.watch_job, "apply_async") as reschedule, \
+             patch.object(transform_tasks, "upload_job_log"):
+            transform_tasks.watch_job.apply(args=["rid-8"], task_id="rid-8")
+
+        status = AsyncResult("rid-8", app=celery_app)
+        assert status.state == "PBS_PROGRESS"
+        assert status.info["json_decode_msg"] == "json decode fail at line 1"
+        assert reschedule.call_args.kwargs["args"][:3] == ["rid-8", None, 1]
 
 
 class TestChainFailed:
