@@ -55,6 +55,9 @@ SEARCH_JSONL_INT = 10        # seconds between checks while the log does not exi
 # Silent polls never write to Redis, so the result key's TTL (result_expires) would run out
 # on a long quiet job. Re-save the current state this often; keep it well under result_expires.
 HEARTBEAT_INT = 12 * 60 * 60  # seconds
+# create_boreas_artifacts retries for seconds, so a request whose ":artifacts" step still has not
+# succeeded after this long never got its chain run: the watcher fails it and stops.
+CHAIN_DEADLINE_INT = 10 * 60  # seconds
 
 # pgadd/pgget log flags: log errors but never EXITLG — sys.exit(1) would kill the
 # worker process (WorkerLostError) instead of failing/retrying the task normally.
@@ -238,7 +241,7 @@ def chain_failed(request, exc, traceback, external_job_id: str, callback_url: Op
 
 @celery_app.task(bind=True, track_started=False)
 def watch_job(self, external_job_id: str, callback_url: Optional[str] = None, last_line: int = 0,
-              last_refresh: Optional[float] = None):
+              last_refresh: Optional[float] = None, started_at: Optional[float] = None):
     """Tail {external_job_id}.gdexws.jsonl and mirror it into this task's state.
 
     Each run is one jsonl file read: if the job hasn't finished, the task
@@ -277,6 +280,13 @@ def watch_job(self, external_job_id: str, callback_url: Optional[str] = None, la
     Possible task handling issues:
     1. The task keeps rescheduling if the PBS job never writes a terminal line, potentially leading to an infinite loop.
         Solution: check if the PBS job still exists in the watcher before rescheduling.
+        That check needs cindex_submit, so a request whose chain never ran has no PBS job to
+        check: if CHAIN_DEADLINE_INT after the first poll the ":artifacts" step has still not
+        succeeded (and no PBS job was submitted), the watcher marks the request FAILURE,
+        sends the final callback, revokes the chain steps and stops. Later chain steps are
+        not part of this deadline. started_at (first poll time) travels through the
+        reschedules to measure it; a poll queued before this field existed starts its clock
+        on its next run.
     2. The task may never notify the portal if it crashes due to an unhandled exception (bad JSON line, I/O error, bug).
         Solution: 
             1. JSON decode errors handled in json parsing `_read_complete_jsons()`
@@ -355,12 +365,40 @@ def watch_job(self, external_job_id: str, callback_url: Optional[str] = None, la
         )
         raise Ignore()
 
+    # the chain never started (message lost, worker died, watcher started without a chain):
+    # nothing will ever write a log, so fail the request and tell the portal. cindex_submit
+    # guards a long job whose ":artifacts" result key has expired (results live one day).
+    if started_at is None:
+        started_at = time.time()
+    if (time.time() - started_at >= CHAIN_DEADLINE_INT and cindex_submit is None
+            and not AsyncResult(f"{external_job_id}:artifacts", app=celery_app).successful()):
+        msg = (f"The artifacts step did not succeed within {CHAIN_DEADLINE_INT // 60} mins "
+               "(the chain did not run); the watcher stopped.")
+        # mark_as_failure (as chain_failed does) stores a FAILURE Celery can read back;
+        # update_state(FAILURE, {"msg": ...}) lacks the exception type and breaks the status read
+        celery_app.backend.mark_as_failure(external_job_id, RuntimeError(msg))
+        # best effort: keep a late chain step from submitting a job the portal was told failed
+        try:
+            celery_app.control.revoke([f"{external_job_id}:{step}" for step in STEP_NAMES[:3]])
+        except Exception:
+            logger.exception(f"Could not revoke the chain steps of external_job_id={external_job_id}")
+        if callback_url:
+            call_back_json = job_response(
+                task_id=external_job_id, status="FAILURE", result={"msg": msg},
+                job_type="transform", completed=datetime.now(timezone.utc).isoformat(),
+            )
+            notify_callback.apply_async(
+                args=[call_back_json, callback_url],
+                task_id=f"{external_job_id}:callback-final",
+            )
+        raise Ignore()
+
     # if log does not exist
     if not log_path.exists():
         # change state to PENDING
         self.update_state(state="PENDING", meta=_meta({"msg": "log file not written yet"}))
         # reschedule the watch to check again later (the write above refreshed the TTL)
-        _reschedule_watch(self, external_job_id, callback_url, last_line, SEARCH_JSONL_INT, time.time())
+        _reschedule_watch(self, external_job_id, callback_url, last_line, SEARCH_JSONL_INT, time.time(), started_at)
 
     # Read the new log entries from the last processed line onward
     json_lines = _read_complete_jsons(log_path)
@@ -393,7 +431,7 @@ def watch_job(self, external_job_id: str, callback_url: Optional[str] = None, la
                           "last_polled_at": datetime.now(timezone.utc).isoformat()},
                 )
             last_refresh = now
-        _reschedule_watch(self, external_job_id, callback_url, last_line, READ_JSONL_INT, last_refresh)
+        _reschedule_watch(self, external_job_id, callback_url, last_line, READ_JSONL_INT, last_refresh, started_at)
 
     # identify terminal lines (PBS_COMPLETED or PBS_FAILED) for PBS job completion state
     for jline in new_json_lines:
@@ -434,15 +472,15 @@ def watch_job(self, external_job_id: str, callback_url: Optional[str] = None, la
     latest = new_json_lines[-1]
     self.update_state(state=jsonl_to_celery_state(latest), meta=_meta(latest))
 
-    _reschedule_watch(self, external_job_id, callback_url, new_last_line, READ_JSONL_INT, time.time())
+    _reschedule_watch(self, external_job_id, callback_url, new_last_line, READ_JSONL_INT, time.time(), started_at)
 
 
 def _reschedule_watch(task, external_job_id: str, callback_url: Optional[str], last_line: int, countdown: int,
-                      last_refresh: Optional[float] = None):
+                      last_refresh: Optional[float] = None, started_at: Optional[float] = None):
     """Queue the next watch_job poll (a manual retry) under the same task id, then stop this
     run without writing a result ("Ignore()" keeps the current state/meta)."""
     watch_job.apply_async(
-        args=[external_job_id, callback_url, last_line, last_refresh],
+        args=[external_job_id, callback_url, last_line, last_refresh, started_at],
         task_id=task.request.id,
         countdown=countdown,
     )

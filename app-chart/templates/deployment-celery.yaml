@@ -78,10 +78,7 @@ spec:
           value: "redis://{{ $redisAuth }}{{ $redisHost }}:{{ .Values.redis.port }}/{{ .Values.redis.brokerDb }}"
         - name: CELERY_RESULT_BACKEND
           value: "redis://{{ $redisAuth }}{{ $redisHost }}:{{ .Values.redis.port }}/{{ .Values.redis.resultDb }}"
-        # Sent as X-GDEX-Services-Secret on portal callbacks (app/utils/callback.py callback_to_portal);
-        # the portal's GdexServicesReceiver rejects callbacks without it.
-        # Same secrets as deployment.yaml's API container — the worker needs
-        # dscheck (Postgres) and Boreas (S3) access too.
+        # dscheck (Postgres) and Boreas (S3) access env vars for the worker container.
         - name: OBJECT_STORE_ACCESS_KEY_ID
           valueFrom:
             secretKeyRef:
@@ -102,6 +99,9 @@ spec:
             secretKeyRef:
               name: {{ .Values.webapp.pgdb01Secret.existingSecret.name }}
               key: dssdbpass
+        # Sent as X-GDEX-Services-Secret on portal callbacks (app/utils/callback.py callback_to_portal);
+        # the portal's GdexServicesReceiver rejects callbacks without it.
+        # Same secrets as deployment.yaml's API container — the worker needs
         - name: GDEX_SERVICES_CALLBACK_SECRET
           valueFrom:
             secretKeyRef:
