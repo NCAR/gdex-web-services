@@ -1,4 +1,5 @@
 import json
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -216,6 +217,55 @@ class TestWatchJob:
         assert AsyncResult("rid-7", app=celery_app).state == "PENDING"
         assert reschedule.call_args.kwargs["args"][:3] == ["rid-7", None, 0]
         assert reschedule.call_args.kwargs["countdown"] == transform_tasks.SEARCH_JSONL_INT
+
+    def test_poll_carries_start_time_forward(self, workdir):
+        with patch.object(transform_tasks.watch_job, "apply_async") as reschedule:
+            transform_tasks.watch_job.apply(args=["rid-s"], task_id="rid-s")
+            first = reschedule.call_args.kwargs["args"][4]
+            transform_tasks.watch_job.apply(args=["rid-s", None, 0, None, first], task_id="rid-s")
+
+        assert first is not None
+        assert reschedule.call_args.kwargs["args"][4] == first
+
+    def test_gives_up_and_notifies_when_chain_never_ran(self, workdir):
+        started = time.time() - transform_tasks.CHAIN_DEADLINE_INT - 1
+        with patch.object(transform_tasks.watch_job, "apply_async") as reschedule, \
+             patch.object(transform_tasks.notify_callback, "apply_async") as notify, \
+             patch.object(celery_app.control, "revoke") as revoke:
+            transform_tasks.watch_job.apply(
+                args=["rid-d", "https://portal/cb", 0, None, started], task_id="rid-d")
+
+        reschedule.assert_not_called()
+        revoke.assert_called_once_with(["rid-d:artifacts", "rid-d:download", "rid-d:qsub"])
+        assert AsyncResult("rid-d", app=celery_app).state == "FAILURE"
+        assert notify.call_args.kwargs["task_id"] == "rid-d:callback-final"
+        payload, url = notify.call_args.kwargs["args"]
+        assert url == "https://portal/cb"
+        assert payload["status"] == "FAILURE"
+        assert payload["external_job_id"] == "rid-d"
+
+    def test_keeps_polling_past_deadline_once_artifacts_succeeded(self, workdir):
+        # later chain steps are not covered by the deadline: artifacts done means keep watching
+        celery_app.backend.mark_as_done("rid-k:artifacts", {"external_job_id": "rid-k"})
+        started = time.time() - transform_tasks.CHAIN_DEADLINE_INT - 1
+        with patch.object(transform_tasks.watch_job, "apply_async") as reschedule, \
+             patch.object(celery_app.control, "revoke") as revoke:
+            transform_tasks.watch_job.apply(args=["rid-k", None, 0, None, started], task_id="rid-k")
+
+        reschedule.assert_called_once()
+        revoke.assert_not_called()
+        assert AsyncResult("rid-k", app=celery_app).state == "PENDING"
+
+    def test_gives_up_without_callback_url(self, workdir):
+        started = time.time() - transform_tasks.CHAIN_DEADLINE_INT - 1
+        with patch.object(transform_tasks.watch_job, "apply_async") as reschedule, \
+             patch.object(transform_tasks.notify_callback, "apply_async") as notify, \
+             patch.object(celery_app.control, "revoke"):
+            transform_tasks.watch_job.apply(args=["rid-n", None, 0, None, started], task_id="rid-n")
+
+        reschedule.assert_not_called()
+        notify.assert_not_called()
+        assert AsyncResult("rid-n", app=celery_app).state == "FAILURE"
 
     def test_bad_json_is_watcher_failure(self, workdir):
         (workdir / "rid-8.gdexws.jsonl").write_text("not json\n")
