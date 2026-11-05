@@ -4,19 +4,38 @@
 # Currently, python is based on the conda env ncarenv/25.10
 # python version: 3.11 
 # using /glade/u/apps/casper/25.10/opt/view/bin/python3
+# All command should be with acted as the gdexdata user. (sudo -iu gdexdata to execute all following commands) 
 #
+# Create the virtual environment
 #   python3 -m venv /glade/u/home/gdexdata/gdexwsenv
 #   source /glade/u/home/gdexdata/gdexwsenv/bin/activate        (bash/zsh)
+#   or
 #   source /glade/u/home/gdexdata/gdexwsenv/bin/activate.csh    (csh/tcsh)
-#   pip install "gdexws>=0.1.1"
+#
+# Install all required Python packages from the HPC-specific requirements file (this file)
+#   /glade/u/home/gdexdata/gdexwsenv/bin/python -m pip install -r https://raw.githubusercontent.com/NCAR/gdex-web-services/main/gdexws/requirements_hpc.txt
+#
+# Setuid (make sure all specialist run the pywrapper that make the files has the correct permissions)
+#   pywrapper-install -c  # compile the pywrapper (owned by gdexdata with the setuid bit (mode 4750))
+#   pywrapper-install --pgstart --username gdexdata   # create pgstart_gdexdata
+#   pywrapper-install -l all   # pywrapper-install -l creates the dsarch/gdexcp symlinks as gdexdata through pgstart_gdexdata
 #
 # Runtime dependencies are pulled in from gdexws's package metadata.
 # System tools setfacl/getfacl (OS package "acl") must be on PATH.  
 #
-# Crontab setup for upgrading gdexws environment (gdexdata cron)
+# Crontab setup for ONLY upgrading gdexws tool (in the "gdexdata" cron)
 # Upgrade gdexws in the HPC venv every day at 03:00
 # 0 3 * * * (date; /glade/u/home/gdexdata/gdexwsenv/bin/python -m pip install --upgrade --disable-pip-version-check "gdexws>=0.1.1") >> /glade/u/home/gdexdata/gdexwsenv-upgrade.log 2>&1
 #
+
+
+gdexws>=0.1.1
+rda-python-miscs>=3.0.11
+rda-python-dsarch>=3.0.17
+rda-python-common>=3.0.28
+
+
+
 # Setting the env permission (not applied)
 # V=/glade/u/home/gdexdata/gdexwsenv
 #
@@ -30,5 +49,3 @@
 # # 3. Default ACLs: files that pip creates later are group-writable too,
 # #    whatever umask the person running pip has
 # find $V -type d -exec setfacl -m d:g::rwx,d:m::rwx {} +
-
-gdexws>=0.1.1

@@ -203,6 +203,21 @@ def create_exchange_dir(username, dirname, exchange_dir=EXCHANGE_DIR, debug=Fals
     ------
     ExchangeDirError
         On any validation, creation, or ACL failure.
+
+    Examples
+    --------
+    From the command line, which calls this function and exits 1 on an ``ExchangeDirError``
+    (for example when ``mydata`` already exists):
+
+    $ gdexws create-exchange-dir jdoe mydata
+
+    From Python:
+
+    >>> create_exchange_dir("jdoe", "mydata")
+    '/glade/campaign/collections/gdex/data/exchange/mydata'
+
+    Either way, ``jdoe`` gets ``rwx`` on the new directory and, through the default ACL,
+    on anything created inside it later (see ``_grant_acl``).
     """
     validate_dirname(dirname)
     validate_username(username)

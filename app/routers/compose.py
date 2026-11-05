@@ -344,7 +344,7 @@ def post_transform(
                 "debug": true
             }
         ],
-        "CallbackUrl": "https://gdex.ucar.edu/api/gdex-services-event/"
+        "CallbackUrl": "https://gdex.ucar.edu/submitportal/gdex-services-event/"
     }
     ```
     
