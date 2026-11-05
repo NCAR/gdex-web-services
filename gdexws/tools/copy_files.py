@@ -272,7 +272,7 @@ def copy_files(
     for src_file, dest_file in pairs:
         command = [exe, "-f", str(src_file), "-t", str(dest_file)]
         if dry_run:
-            service_log(COMMAND_NAME, "INFO", "Dry run: would run command", command=" ".join(command))
+            service_log(COMMAND_NAME, "INFO", "Dry run: would run command " + " ".join(command))
             continue
         try:
             dest_file.parent.mkdir(parents=True, exist_ok=True)
@@ -297,8 +297,8 @@ def copy_files(
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     """Declare CLI arguments on the `copy-files` subparser."""
-    parser.add_argument("source", help="File or directory to copy")
-    parser.add_argument("target", help="Existing exchange directory to copy into")
+    parser.add_argument("-s", "--source", required=True, help="File or directory to copy")
+    parser.add_argument("-t", "--target", required=True, help="Existing exchange directory to copy into")
     parser.add_argument("-L", "--follow-symlinks", action="store_true",
                         help="Follow symlinks inside a directory, keeping the layout that holds the links")
     parser.add_argument("--include", action="append", metavar="PATTERN",
@@ -306,7 +306,6 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--exclude", action="append", metavar="PATTERN",
                         help="Skip file names matching this wildcard (repeatable; quote it; wins over --include)")
     parser.add_argument("--dry-run", action="store_true", help="Log the gdexcp commands without running them")
-    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
 
 def run(args: argparse.Namespace) -> None:
