@@ -13,7 +13,9 @@ def add_global_meta(file_path, key, value, debug=False):
     """Add a global attribute to a netCDF file."""
     import netCDF4  # deferred so `gdexws --help` stays fast
 
-    full_path = relpath_validate([file_path])[0]  # Validate the file path
+    # turn return Path object into a string for netCDF4
+    full_path = str(relpath_validate([file_path])[0])  # validate; netCDF4 wants a str
+    
     if debug:
         service_log("add-global-meta", "DEBUG", f"Adding global attribute {key}={value} to {file_path}")
 
