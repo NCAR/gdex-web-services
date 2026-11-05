@@ -1,18 +1,21 @@
 """Utility functions for file path validation."""
 
 from pathlib import Path
-from typing import Iterable, List, Optional, Union
-
-from gdexws.utils import service_log
+from typing import Iterable, List, Union
 
 PathLike = Union[str, Path]
 
 DEFAULT_BASE_DIR = Path('/glade/campaign/collections/gdex/data/exchange/')
 
+
+class PathValidationError(ValueError):
+    """Raised when a path resolves outside the base directory."""
+
+
 def relpath_validate(
     file_paths: Iterable[PathLike],
     base_dir: PathLike = DEFAULT_BASE_DIR
-) -> Optional[List[Path]]:
+) -> List[Path]:
     """Resolve file paths against the base directory and check they stay inside it.
 
     Parameters
@@ -27,19 +30,26 @@ def relpath_validate(
 
     Returns
     -------
-    list of pathlib.Path or None
+    list of pathlib.Path
         Fully resolved (symlink-free) absolute paths, in the same order as
-        ``file_paths``, if all of them are inside ``base_dir``.
-        ``None`` if any path escapes it; an ERROR line is logged and the
-        remaining paths are not checked.
+        ``file_paths``. A single path comes back as a list of one: take ``[0]``.
+
+    Raises
+    ------
+    PathValidationError
+        If any path escapes ``base_dir``; the remaining paths are not checked.
+        It is a ``ValueError`` subclass, and nothing is logged here: the caller
+        decides whether to log, so a tool can catch it in its own ``try`` block.
 
     Examples
     --------
     >>> relpath_validate(["file1.nc", Path("sub/file2.nc")])
     [PosixPath('/glade/campaign/collections/gdex/data/exchange/file1.nc'),
      PosixPath('/glade/campaign/collections/gdex/data/exchange/sub/file2.nc')]
-    >>> relpath_validate(["../secret.nc"]) is None
-    True
+    >>> relpath_validate(["../secret.nc"])
+    Traceback (most recent call last):
+        ...
+    PathValidationError: Access denied: '../secret.nc' escapes base directory
     """
     base_path = Path(base_dir).resolve()
     full_paths = []
@@ -48,8 +58,7 @@ def relpath_validate(
             full_path = (base_path / Path(file_path)).resolve()
             # This will raise ValueError if path escapes base directory
             full_path.relative_to(base_path)
-            full_paths.append(full_path)
         except ValueError:
-            service_log("file-validation", "ERROR", f"Access denied: '{file_path}' escapes base directory")
-            return None
+            raise PathValidationError(f"Access denied: '{file_path}' escapes base directory") from None
+        full_paths.append(full_path)
     return full_paths
