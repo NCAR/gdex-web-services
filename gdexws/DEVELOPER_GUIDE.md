@@ -68,6 +68,15 @@ def add_arguments(parser):
     parser.add_argument("--count", type=int, default=1, help="How many times to repeat")
 ```
 
+Every argument must be a **named option** (`--name`, optionally with a short form like `-n`),
+never a positional argument. Payloads pass every value as `--key value`, so a positional
+argument can't be filled from a payload. Use `required=True` for inputs that must be given:
+
+```python
+parser.add_argument("username")                          # wrong: positional
+parser.add_argument("-u", "--username", required=True)   # right: named and required
+```
+
 Names you must **not** use, because the CLI already defines them:
 
 | Name | Used by |
@@ -221,13 +230,15 @@ For your tool to work in a payload, it must follow how `build_command` in
 | Every other input is a **long option** (`--name`), not a positional argument | Each payload key `k` becomes `--k`. |
 | Boolean options use `action="store_true"` | `true` adds the flag, `false` leaves it out. |
 | Use `type=int`, `type=float`, etc. for non-string options | Values arrive as strings (`str(value)`). |
-| Don't take list or dict values | They would arrive as their Python text form, e.g. `"['a', 'b']"`. |
+| Lists repeat the option; use `action="append"` | `{"include": ["a", "b"]}` → `--include a --include b`. |
+| Don't take dict values | They would arrive as their Python text form, e.g. `"{'a': 1}"`. |
 
 Underscores in payload keys become hyphens (`global_attr_name` → `--global-attr-name`), and
 `"command"` can use either `add_global_meta` or `add-global-meta`.
 
-A tool that uses positional arguments (like `create-exchange-dir <username> <dirname>`) or no
-`--file` can't be used from a payload. That's fine for tools that are only run by hand.
+Positional arguments are not allowed in any tool (see [`add_arguments`](#add_argumentsparser)).
+If the payload's `"Files"` list is empty, commands run once with no `--file`, so a tool that
+doesn't work on a file (like `create-exchange-dir`) should not declare `-f/--file`.
 
 `transform` finds `gdexws` through `PATH`, so the venv must be activated (or its `bin/` on
 `PATH`) where `transform` runs. The PBS script does this with `source .../bin/activate`.
@@ -315,6 +326,8 @@ If any of these is missed, the tool, the whole `gdexws` command, or the PyPI rel
       command name doesn't clash with an existing one.
 - [ ] Module defines both `add_arguments(parser)` and `run(args)`, spelled exactly.
 - [ ] No `-d`/`--debug`, `-h`/`--help`, `--tool` or `--func` options.
+- [ ] No positional arguments: every input is a named option (`--name`), with
+      `required=True` where it must be given.
 - [ ] Nothing at module level can fail or has side effects.
 - [ ] Failures call `sys.exit(1)`, so `transform` and PBS jobs can detect them.
 - [ ] New packages added to `dependencies`, and new package folders to `packages`, in
