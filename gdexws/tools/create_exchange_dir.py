@@ -264,8 +264,10 @@ def create_exchange_dir(username, dirname, exchange_dir=EXCHANGE_DIR, debug=Fals
 
 def add_arguments(parser):
     """Declare CLI arguments on the `create-exchange-dir` subparser."""
-    parser.add_argument("username", help="HPC username to grant read/write access")
-    parser.add_argument("dirname", help="Name of the directory to create (a single path component)")
+    parser.add_argument("-u", "--username", required=True,
+                        help="HPC username to grant read/write access")
+    parser.add_argument("-n", "--dirname", required=True,
+                        help="Name of the directory to create (a single path component)")
 
 
 def run(args):

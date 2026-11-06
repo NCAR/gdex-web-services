@@ -128,7 +128,28 @@ class TestCreate:
 
 class TestMain:
     def test_error_exits_nonzero(self, exchange):
-        with patch("sys.argv", ["gdexws", "create-exchange-dir", USER, ".."]):
+        with patch("sys.argv", ["gdexws", "create-exchange-dir", "--username", USER, "--dirname", ".."]):
             with pytest.raises(SystemExit) as exc:
                 cli.main()
         assert exc.value.code == 1
+
+    @pytest.mark.parametrize("argv", [
+        ["--username", USER, "--dirname", "proj"],
+        ["-u", USER, "-n", "proj"],
+    ])
+    def test_named_options_reach_create(self, argv):
+        with patch("sys.argv", ["gdexws", "create-exchange-dir", *argv]), \
+                patch.object(ced, "create_exchange_dir") as create:
+            cli.main()
+        create.assert_called_once_with(USER, "proj", debug=False)
+
+    @pytest.mark.parametrize("argv", [
+        [USER, "proj"],                 # old positional form is rejected
+        ["--username", USER],           # --dirname missing
+        ["--dirname", "proj"],          # --username missing
+    ])
+    def test_bad_arguments_exit_2(self, argv):
+        with patch("sys.argv", ["gdexws", "create-exchange-dir", *argv]):
+            with pytest.raises(SystemExit) as exc:
+                cli.main()
+        assert exc.value.code == 2

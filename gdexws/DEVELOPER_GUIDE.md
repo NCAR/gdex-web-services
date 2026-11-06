@@ -68,6 +68,15 @@ def add_arguments(parser):
     parser.add_argument("--count", type=int, default=1, help="How many times to repeat")
 ```
 
+Every argument must be a **named option** (`--name`, optionally with a short form like `-n`),
+never a positional argument. Payloads pass every value as `--key value`, so a positional
+argument can't be filled from a payload. Use `required=True` for inputs that must be given:
+
+```python
+parser.add_argument("username")                          # wrong: positional
+parser.add_argument("-u", "--username", required=True)   # right: named and required
+```
+
 Names you must **not** use, because the CLI already defines them:
 
 | Name | Used by |
@@ -217,17 +226,37 @@ For your tool to work in a payload, it must follow how `build_command` in
 
 | Rule | Why |
 |---|---|
-| Accept the file as **`-f` / `--file`** | Every file is passed as `-f <file>`. |
+| A tool that works on one file takes it as **`-f` / `--file`** | `transform` passes each `"Files"` entry as `--file <file>`. |
 | Every other input is a **long option** (`--name`), not a positional argument | Each payload key `k` becomes `--k`. |
 | Boolean options use `action="store_true"` | `true` adds the flag, `false` leaves it out. |
 | Use `type=int`, `type=float`, etc. for non-string options | Values arrive as strings (`str(value)`). |
-| Don't take list or dict values | They would arrive as their Python text form, e.g. `"['a', 'b']"`. |
+| Lists repeat the option; use `action="append"` | `{"include": ["a", "b"]}` → `--include a --include b`. |
+| Don't take dict values | They would arrive as their Python text form, e.g. `"{'a': 1}"`. |
 
 Underscores in payload keys become hyphens (`global_attr_name` → `--global-attr-name`), and
 `"command"` can use either `add_global_meta` or `add-global-meta`.
 
-A tool that uses positional arguments (like `create-exchange-dir <username> <dirname>`) or no
-`--file` can't be used from a payload. That's fine for tools that are only run by hand.
+Positional arguments are not allowed in any tool (see [`add_arguments`](#add_argumentsparser)).
+
+### `-f/--file` is reserved for single-file tools
+
+`-f/--file` has one meaning: **the single file this run of the tool works on.** The API
+server's payload lists those files in `"Files"`, and `transform` fills in `--file` for you:
+
+- **`"Files"` has entries:** each command runs once per file, with `--file <file>` added.
+  `{"Files": ["a.nc", "b.nc"]}` runs `gdexws add-global-meta --file a.nc ...`, then
+  `--file b.nc`.
+- **`"Files"` is empty:** each command runs once, with no `--file`.
+
+So:
+
+- Declare `-f/--file` only if your tool works on exactly one file per run (like
+  `add-global-meta`). Make it `required=True`.
+- Don't use `-f/--file` for anything else, such as a source directory or an output path.
+  Use a different name (`copy-files` uses `--source` and `--target`).
+- A tool that doesn't work on a single file (like `copy-files` or `create-exchange-dir`)
+  should not declare `-f/--file`. It is run with an empty `"Files"` list.
+- Payload users shouldn't put a `"file"` key in a command. Files go in `"Files"`.
 
 `transform` finds `gdexws` through `PATH`, so the venv must be activated (or its `bin/` on
 `PATH`) where `transform` runs. The PBS script does this with `source .../bin/activate`.
@@ -315,14 +344,17 @@ If any of these is missed, the tool, the whole `gdexws` command, or the PyPI rel
       command name doesn't clash with an existing one.
 - [ ] Module defines both `add_arguments(parser)` and `run(args)`, spelled exactly.
 - [ ] No `-d`/`--debug`, `-h`/`--help`, `--tool` or `--func` options.
+- [ ] No positional arguments: every input is a named option (`--name`), with
+      `required=True` where it must be given.
 - [ ] Nothing at module level can fail or has side effects.
 - [ ] Failures call `sys.exit(1)`, so `transform` and PBS jobs can detect them.
 - [ ] New packages added to `dependencies`, and new package folders to `packages`, in
       `pyproject.toml`.
 - [ ] `gdexws --help` still works and lists the tool, and `gdexws my-tool --help` shows its
       options.
-- [ ] If it should work in payloads: accepts `-f/--file`, uses only long options, and was run
-      once through `gdexws transform`.
+- [ ] `-f/--file` is declared only if the tool works on one file per run, and never used for
+      anything else.
+- [ ] If it should work in payloads: was run once through `gdexws transform`.
 - [ ] If it takes paths from users or payloads: they're checked with `relpath_validate`.
 
 ### Good to have
