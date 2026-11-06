@@ -226,7 +226,7 @@ For your tool to work in a payload, it must follow how `build_command` in
 
 | Rule | Why |
 |---|---|
-| Accept the file as **`-f` / `--file`** | Every file is passed as `-f <file>`. |
+| A tool that works on one file takes it as **`-f` / `--file`** | `transform` passes each `"Files"` entry as `--file <file>`. |
 | Every other input is a **long option** (`--name`), not a positional argument | Each payload key `k` becomes `--k`. |
 | Boolean options use `action="store_true"` | `true` adds the flag, `false` leaves it out. |
 | Use `type=int`, `type=float`, etc. for non-string options | Values arrive as strings (`str(value)`). |
@@ -237,8 +237,26 @@ Underscores in payload keys become hyphens (`global_attr_name` → `--global-att
 `"command"` can use either `add_global_meta` or `add-global-meta`.
 
 Positional arguments are not allowed in any tool (see [`add_arguments`](#add_argumentsparser)).
-If the payload's `"Files"` list is empty, commands run once with no `--file`, so a tool that
-doesn't work on a file (like `create-exchange-dir`) should not declare `-f/--file`.
+
+### `-f/--file` is reserved for single-file tools
+
+`-f/--file` has one meaning: **the single file this run of the tool works on.** The API
+server's payload lists those files in `"Files"`, and `transform` fills in `--file` for you:
+
+- **`"Files"` has entries:** each command runs once per file, with `--file <file>` added.
+  `{"Files": ["a.nc", "b.nc"]}` runs `gdexws add-global-meta --file a.nc ...`, then
+  `--file b.nc`.
+- **`"Files"` is empty:** each command runs once, with no `--file`.
+
+So:
+
+- Declare `-f/--file` only if your tool works on exactly one file per run (like
+  `add-global-meta`). Make it `required=True`.
+- Don't use `-f/--file` for anything else, such as a source directory or an output path.
+  Use a different name (`copy-files` uses `--source` and `--target`).
+- A tool that doesn't work on a single file (like `copy-files` or `create-exchange-dir`)
+  should not declare `-f/--file`. It is run with an empty `"Files"` list.
+- Payload users shouldn't put a `"file"` key in a command. Files go in `"Files"`.
 
 `transform` finds `gdexws` through `PATH`, so the venv must be activated (or its `bin/` on
 `PATH`) where `transform` runs. The PBS script does this with `source .../bin/activate`.
@@ -334,8 +352,9 @@ If any of these is missed, the tool, the whole `gdexws` command, or the PyPI rel
       `pyproject.toml`.
 - [ ] `gdexws --help` still works and lists the tool, and `gdexws my-tool --help` shows its
       options.
-- [ ] If it should work in payloads: accepts `-f/--file`, uses only long options, and was run
-      once through `gdexws transform`.
+- [ ] `-f/--file` is declared only if the tool works on one file per run, and never used for
+      anything else.
+- [ ] If it should work in payloads: was run once through `gdexws transform`.
 - [ ] If it takes paths from users or payloads: they're checked with `relpath_validate`.
 
 ### Good to have
