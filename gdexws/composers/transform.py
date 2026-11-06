@@ -53,14 +53,6 @@ def transform(payload_path: str) -> None:
     files = payload.get("Files", [])
     commands = payload.get("Commands", [])
 
-    if not files:
-        service_log(
-            command_name="transform",
-            level="ERROR",
-            process_message="No files specified in payload"
-        )
-        sys.exit(1)
-
     if not commands:
         service_log(
             command_name="transform",
@@ -68,6 +60,38 @@ def transform(payload_path: str) -> None:
             process_message="No commands specified in payload"
         )
         sys.exit(1)
+
+    # Process commands that do not have any files specified
+    if not files:
+        for command_spec in commands:
+            # Extract command name and parameters
+            if "command" not in command_spec:
+                service_log(
+                    command_name="transform",
+                    level="ERROR",
+                    process_message=f"Command spec missing 'command' key: {command_spec}"
+                )
+                sys.exit(1)
+
+            command_name = command_spec["command"]
+
+            # Convert underscore to hyphen for CLI command name
+            cli_command = command_name.replace("_", "-")
+
+            # Build the full command
+            cmd = build_command(cli_command, command_spec, None)
+
+            # Execute the command
+            return_code = execute_command(cmd)
+
+            if return_code != 0:
+                service_log(
+                    command_name="transform",
+                    level="ERROR",
+                    process_message=f"Command failed with return code {return_code}",
+                    command=" ".join(cmd)
+                )
+                sys.exit(1)
 
     # Start processing each file and loop through the commands
     for file_path in files:
@@ -107,6 +131,7 @@ def transform(payload_path: str) -> None:
                     command=" ".join(cmd)
                 )
                 sys.exit(1)
+    
 
 def add_arguments(parser):
     """Declare CLI arguments on the `transform` subparser."""

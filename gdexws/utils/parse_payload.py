@@ -109,7 +109,7 @@ def _load_payload_from_url(url: str, timeout: float = 10.0) -> Dict[str, Any]:
     return response.json()
 
 
-def build_command(command_name: str, params: Dict[str, Any], file_path: str) -> List[str]:
+def build_command(command_name: str, params: Dict[str, Any], file_path: str = None) -> List[str]:
     """
     Build a CLI command with arguments.
 
@@ -130,7 +130,8 @@ def build_command(command_name: str, params: Dict[str, Any], file_path: str) -> 
     cmd = ["gdexws", command_name]
 
     # Add file argument
-    cmd.extend(["-f", file_path])
+    if file_path is not None:
+        cmd.extend(["--file", file_path])
 
     # Add other parameters
     for key, value in params.items():
