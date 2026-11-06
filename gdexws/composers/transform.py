@@ -53,14 +53,6 @@ def transform(payload_path: str) -> None:
     files = payload.get("Files", [])
     commands = payload.get("Commands", [])
 
-    if not files:
-        service_log(
-            command_name="transform",
-            level="ERROR",
-            process_message="No files specified in payload"
-        )
-        sys.exit(1)
-
     if not commands:
         service_log(
             command_name="transform",
@@ -68,6 +60,11 @@ def transform(payload_path: str) -> None:
             process_message="No commands specified in payload"
         )
         sys.exit(1)
+
+    # Process commands that do not have any files specified
+    if not files:
+        for command_spec in commands:
+            _run_command(command_spec, None)
 
     # Start processing each file and loop through the commands
     for file_path in files:
@@ -79,34 +76,46 @@ def transform(payload_path: str) -> None:
         )
 
         for command_spec in commands:
-            # Extract command name and parameters
-            if "command" not in command_spec:
-                service_log(
-                    command_name="transform",
-                    level="ERROR",
-                    process_message=f"Command spec missing 'command' key: {command_spec}"
-                )
-                sys.exit(1)
+            _run_command(command_spec, file_path)
 
-            command_name = command_spec["command"]
 
-            # Convert underscore to hyphen for CLI command name
-            cli_command = command_name.replace("_", "-")
+def _run_command(command_spec: dict, file_path: str | None) -> None:
+    """
+    Build and execute a single command from its spec.
 
-            # Build the full command
-            cmd = build_command(cli_command, command_spec, file_path)
+    Exits the process with status 1 if the spec is missing the
+    'command' key or if the command returns a non-zero exit code.
 
-            # Execute the command
-            return_code = execute_command(cmd)
+    Parameters
+    ----------
+    command_spec : dict
+        Command specification from the payload's "Commands" list
+    file_path : str or None
+        File to run the command on, or None for commands that take no file
+    """
+    if "command" not in command_spec:
+        service_log(
+            command_name="transform",
+            level="ERROR",
+            process_message=f"Command spec missing 'command' key: {command_spec}"
+        )
+        sys.exit(1)
 
-            if return_code != 0:
-                service_log(
-                    command_name="transform",
-                    level="ERROR",
-                    process_message=f"Command failed with return code {return_code}",
-                    command=" ".join(cmd)
-                )
-                sys.exit(1)
+    # Convert underscore to hyphen for CLI command name
+    cli_command = command_spec["command"].replace("_", "-")
+
+    cmd = build_command(cli_command, command_spec, file_path)
+    return_code = execute_command(cmd)
+
+    if return_code != 0:
+        service_log(
+            command_name="transform",
+            level="ERROR",
+            process_message=f"Command failed with return code {return_code}",
+            exec_command=" ".join(cmd)
+        )
+        sys.exit(1)
+
 
 def add_arguments(parser):
     """Declare CLI arguments on the `transform` subparser."""
