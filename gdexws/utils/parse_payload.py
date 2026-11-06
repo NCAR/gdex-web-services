@@ -146,6 +146,11 @@ def build_command(command_name: str, params: Dict[str, Any], file_path: str = No
         if isinstance(value, bool):
             if value:
                 cmd.append(cli_key)
+        # Handle repeatable options: {"include": ["*.nc", "*.h5"]}
+        # becomes --include *.nc --include *.h5 (JSON can't repeat a key)
+        elif isinstance(value, list):
+            for item in value:
+                cmd.extend([cli_key, str(item)])
         else:
             cmd.extend([cli_key, str(value)])
 
