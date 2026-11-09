@@ -48,7 +48,7 @@ gdexws add-global-meta -f /path/to/file.nc -n "attribute_name" -v "attribute_val
 
 ### create-exchange-dir
 
-Create a directory directly under `/glade/campaign/collections/gdex/data/exchange` and grant an HPC user read/write access (`rwx`, plus a default ACL so new contents inherit it) via POSIX ACLs. Requires `setfacl`/`getfacl`.
+Create a directory directly under `/glade/campaign/collections/gdex/data/exchange` and grant an HPC user read/write access (`rwx`, plus a default ACL so new contents inherit it) via POSIX ACLs. The directory's group (`decs`, which includes `gdexdata`) also gets `rwx` the same way, so `copy-files`/`gdexcp` can write into it; the directory is setgid (mode `2775`) so new contents stay in that group, and others can read (`r-x`). Requires `setfacl`/`getfacl`.
 
 ```bash
 gdexws create-exchange-dir --username <username> --dirname <dirname>

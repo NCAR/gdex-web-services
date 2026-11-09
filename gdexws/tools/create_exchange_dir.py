@@ -24,7 +24,12 @@ _USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
 # rwx: 'x' is required on a directory for the user to traverse into it.
 _ACL_PERMS = "rwx"
-_DIR_MODE = 0o770
+# rwxrwsr-x: owner and group rwx, others read and enter (r-x). setgid (the 2)
+# keeps new contents in the directory's group, so the group (which includes
+# gdexdata, the account gdexcp copies as) can always write into them.
+# setfacl copies these group and other bits into the default ACL, so
+# everything created inside inherits them.
+_DIR_MODE = 0o2775
 
 
 class ExchangeDirError(Exception):
@@ -149,7 +154,11 @@ def _run_acl_tool(args):
 
 
 def _grant_acl(path, username):
-    """Grant ``username`` rwx on ``path`` (access and default ACL) and verify it took effect.
+    """Grant ``username`` and the owning group rwx on ``path`` and verify it took effect.
+
+    Both get an access entry and a default entry, so everything created inside
+    later inherits rwx for them too. The group entry matters because gdexcp copies
+    as gdexdata, which only gets in through the group when someone else owns the files.
 
     Parameters
     ----------
@@ -166,13 +175,15 @@ def _grant_acl(path, username):
     # -P: never follow symlinks; '--' ends option parsing so the path cannot be read as a flag.
     _run_acl_tool([
         "setfacl", "-P",
-        "-m", f"u:{username}:{_ACL_PERMS},d:u:{username}:{_ACL_PERMS}",
+        "-m", (f"u:{username}:{_ACL_PERMS},d:u:{username}:{_ACL_PERMS},"
+               f"g::{_ACL_PERMS},d:g::{_ACL_PERMS}"),
         "--", path,
     ])
     listing = _run_acl_tool(["getfacl", "--absolute-names", "--", path])
     # Drop trailing "#effective:..." comments before comparing entries.
     entries = {line.split("#")[0].strip() for line in listing.splitlines()}
-    expected = {f"user:{username}:{_ACL_PERMS}", f"default:user:{username}:{_ACL_PERMS}"}
+    expected = {f"user:{username}:{_ACL_PERMS}", f"default:user:{username}:{_ACL_PERMS}",
+                f"group::{_ACL_PERMS}", f"default:group::{_ACL_PERMS}"}
     if not expected <= entries:
         raise ExchangeDirError(f"ACL verification failed for '{username}' on {path}")
 
@@ -246,6 +257,11 @@ def create_exchange_dir(username, dirname, exchange_dir=EXCHANGE_DIR, debug=Fals
             raise ExchangeDirError(f"Could not create directory: {exc}")
 
         try:
+            # mkdir's mode is reduced by the umask (and drops setgid), so set it exactly.
+            try:
+                os.chmod(dirname, _DIR_MODE, dir_fd=base_fd)
+            except OSError as exc:
+                raise ExchangeDirError(f"Could not set permissions on directory: {exc}")
             _grant_acl(target, username)
         except ExchangeDirError:
             try:
