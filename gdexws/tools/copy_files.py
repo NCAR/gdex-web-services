@@ -188,12 +188,19 @@ def copy_files(
 ) -> List[Path]:
     """Copy ``source`` into the existing directory ``target`` with gdexcp.
 
-    The target directory must already exist (create it first with
-    ``gdexws create-exchange-dir``) and must be inside ``ALLOWED_TARGET_ROOTS``.
-    A file keeps its name. A directory is always copied recursively: its contents
-    go straight into ``target`` with their layout kept, not into a new subfolder
-    named after the directory. Symlinks inside it are skipped unless ``follow_symlinks`` is set. Every file is attempted even if an
-    earlier one fails; failures are reported together at the end.
+    - ``target`` must already exist (create it with ``gdexws create-exchange-dir``)
+      and be inside ``ALLOWED_TARGET_ROOTS``.
+    - A file keeps its name.
+    - A directory is copied recursively: its contents go straight into ``target``
+      with their layout kept (no new subfolder named after the directory).
+    - Symlinks inside a directory are skipped unless ``follow_symlinks`` is set.
+    - Every file is attempted even if an earlier one fails; failures are reported
+      together at the end.
+    - Missing subdirectories are created by gdexcp, not here, so they are owned by
+      ``gdexdata`` (a directory made by the caller would not be writable by it).
+    - gdexcp's defaults: directories 775 (``-D``), files 664 (``-F``).
+    - Inside a ``create-exchange-dir`` directory, the default ACL gives the granted
+      user access too; on files it is rw, because 664 sets the ACL mask to rw.
 
     Parameters
     ----------
@@ -213,7 +220,7 @@ def copy_files(
         Wildcard patterns for files to skip, e.g. ``["*.tmp"]``. Wins over ``include``.
         Both match the file name only (not the path), and files only (not directories).
     dry_run : bool
-        Log the gdexcp commands without running them or creating directories.
+        Log the gdexcp commands without running them.
     debug : bool
         Emit DEBUG log lines.
 
@@ -275,7 +282,6 @@ def copy_files(
             service_log(COMMAND_NAME, "INFO", "Dry run: would run command " + " ".join(command))
             continue
         try:
-            dest_file.parent.mkdir(parents=True, exist_ok=True)
             if debug:
                 service_log(COMMAND_NAME, "DEBUG", "Copying", source=str(src_file), target=str(dest_file))
             result = subprocess.run(command, capture_output=True, text=True, check=False)

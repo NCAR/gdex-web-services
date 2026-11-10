@@ -1,5 +1,6 @@
 import os
 import pwd
+import stat
 from unittest.mock import patch
 
 import pytest
@@ -30,7 +31,8 @@ def fake_user():
 def _acl_ok(args):
     """Fake _run_acl_tool: setfacl succeeds, getfacl echoes the expected entries."""
     if args[0] == "getfacl":
-        return f"user:{USER}:rwx\t#effective:rwx\ndefault:user:{USER}:rwx\n"
+        return (f"user:{USER}:rwx\t#effective:rwx\ngroup::rwx\n"
+                f"default:user:{USER}:rwx\ndefault:group::rwx\n")
     return ""
 
 
@@ -76,8 +78,21 @@ class TestCreate:
         assert os.path.isdir(path)
         setfacl = run.call_args_list[0].args[0]
         assert setfacl[:2] == ["setfacl", "-P"]
-        assert f"u:{USER}:rwx,d:u:{USER}:rwx" in setfacl
+        assert f"u:{USER}:rwx,d:u:{USER}:rwx,g::rwx,d:g::rwx" in setfacl
         assert setfacl[-2:] == ["--", path]
+        # Exact mode despite the umask: group rwx + setgid, others r-x.
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o2775
+
+    def test_acl_verification_requires_group_entry(self, exchange):
+        """getfacl showing only the user entries (group still r-x) must fail and roll back."""
+        def user_only(args):
+            if args[0] == "getfacl":
+                return f"user:{USER}:rwx\ngroup::r-x\ndefault:user:{USER}:rwx\ndefault:group::r-x\n"
+            return ""
+        with patch.object(ced, "_run_acl_tool", side_effect=user_only):
+            with pytest.raises(ExchangeDirError, match="verification failed"):
+                create_exchange_dir(USER, "proj", exchange_dir=exchange)
+        assert os.listdir(exchange) == []
 
     def test_existing_dir_fails_and_is_untouched(self, exchange):
         os.mkdir(os.path.join(exchange, "proj"))
