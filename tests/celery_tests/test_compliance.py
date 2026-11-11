@@ -127,9 +127,10 @@ class TestNetcdfChecks:
         report = netcdf.check(make_nc(tmp_path, var_attrs=attrs))
         assert report["errors"] == []
 
-    def test_missing_fill_value(self, tmp_path):
+    def test_missing_fill_value_is_only_a_warning(self, tmp_path):
         report = netcdf.check(make_nc(tmp_path, fill=None))
-        assert ids(report["errors"]) == [base.VAR_FILL_VALUE_MISSING]
+        assert report["errors"] == []
+        assert ids(report["warnings"]) == [base.VAR_FILL_VALUE_MISSING]
 
     def test_missing_value_attribute_also_counts(self, tmp_path):
         attrs = {"long_name": "x", "units": "K", "missing_value": -1.0}
@@ -144,6 +145,45 @@ class TestNetcdfChecks:
         for name in ("title", "institution", "source", "history"):
             assert name in messages
         assert "summary" not in messages and "onventions" not in messages  # description / lowercase conventions count
+
+    def test_coordinates_never_need_a_fill_value(self, tmp_path):
+        """build_dataset's time/lat/lon are written with no _FillValue, and only the data variable is held to it."""
+        ds = build_dataset()
+        path = str(tmp_path / "coords.nc")
+        ds.to_netcdf(path, encoding={"t2m": {"_FillValue": -999.0}, "time": {"_FillValue": None},
+                                     "lat": {"_FillValue": None}, "lon": {"_FillValue": None}})
+        assert netcdf.check(path)["errors"] == []
+
+    def test_unlinked_latlon_are_treated_as_coordinates(self, tmp_path):
+        """2-D lat/lon with no `coordinates` attribute land in data_vars; they still need no fill value."""
+        lat = {"units": "degrees_north", "standard_name": "latitude"}
+        lon = {"units": "degrees_east", "standard_name": "longitude"}
+        ds = xr.Dataset(
+            {"t2m": (["time", "y", "x"], np.zeros((2, 2, 2)), {"long_name": "t", "units": "K"}),
+             "lat": (("y", "x"), np.zeros((2, 2)), lat), "lon": (("y", "x"), np.zeros((2, 2)), lon)},
+            coords={"time": ("time", [0.0, 1.0], {"units": "days since 2000-01-01", "calendar": "standard",
+                                                  "standard_name": "time"})},
+            attrs={"title": "t", "summary": "s", "institution": "i", "source": "s", "history": "h",
+                   "Conventions": "CF-1.8"})
+        path = str(tmp_path / "curvilinear.nc")
+        ds.to_netcdf(path, encoding={"t2m": {"_FillValue": -9.0}, "lat": {"_FillValue": None},
+                                     "lon": {"_FillValue": None}, "time": {"_FillValue": None}})
+        assert netcdf.check(path)["errors"] == []
+
+    def test_unlinked_latlon_still_need_units(self, tmp_path):
+        """Being exempt from the data-variable rules doesn't exempt lat/lon from their own rules."""
+        ds = xr.Dataset(
+            {"t2m": (["time", "y", "x"], np.zeros((1, 2, 2)), {"long_name": "t", "units": "K"}),
+             "lat": (("y", "x"), np.zeros((2, 2)), {"standard_name": "latitude"})},
+            coords={"time": ("time", [0.0], {"units": "days since 2000-01-01", "calendar": "standard"})})
+        path = str(tmp_path / "nounits.nc")
+        ds.to_netcdf(path, encoding={"t2m": {"_FillValue": -9.0}, "lat": {"_FillValue": None}})
+        assert ids(netcdf.check(path)["errors"]) == [base.LATLON_UNITS_MISSING]
+
+    def test_ordinary_data_variable_is_still_warned_about_a_missing_fill_value(self, tmp_path):
+        """The coordinate exemption is narrow: only the data variable is warned, never time/lat/lon."""
+        report = netcdf.check(make_nc(tmp_path, fill=None))
+        assert [w["variable"] for w in report["warnings"]] == ["t2m"]
 
     def test_unreadable_file_is_an_error_not_a_crash(self, tmp_path):
         bad = tmp_path / "bad.nc"
@@ -174,9 +214,10 @@ class TestZarrChecks:
         assert ids(report["errors"]) == [base.VAR_LONG_NAME_MISSING, base.VAR_UNITS_MISSING]
 
     def test_missing_fill_value(self, tmp_path, zarr_format):
-        """No _FillValue is an error even though Zarr v3 always has a default fill_value in its metadata."""
+        """No _FillValue is still noticed (as a warning) even though Zarr v3 always has a default fill_value in its metadata."""
         report = zarr_check(make_zarr(tmp_path, zarr_format=zarr_format, fill=None))
-        assert ids(report["errors"]) == [base.VAR_FILL_VALUE_MISSING]
+        assert report["errors"] == []
+        assert ids(report["warnings"]) == [base.VAR_FILL_VALUE_MISSING]
 
     def test_missing_global_attributes_are_warnings(self, tmp_path, zarr_format):
         report = zarr_check(make_zarr(tmp_path, zarr_format=zarr_format, global_attrs={"title": "t"}))

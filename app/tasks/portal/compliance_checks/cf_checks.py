@@ -12,9 +12,10 @@ Errors (any one makes the file non-compliant):
   - the dataset has no coordinates, or a data variable has none
   - a latitude/longitude variable has no units
   - a data variable has no long_name, or no units (unless CF exempts it)
-  - a data variable has no _FillValue or missing_value
 
 Warnings (reported, but the file still passes):
+  - a data variable has no _FillValue or missing_value
+    (coordinates, including time and lat/lon, never need one)
   - the time variable has no standard_name "time"
   - a latitude/longitude variable has no standard_name
   - a data variable's long_name or units is present but blank
@@ -75,6 +76,23 @@ def _lat_lon_kind(name, var):
   return None
 
 
+def _is_coordinate_like(name, var):
+  """True if the variable is a coordinate even when xarray files it under data_vars.
+
+  xarray only treats a variable as a coordinate if it is a dimension
+  coordinate or is named in a `coordinates` attribute. Files that leave that
+  attribute out (common for 2-D lat/lon on curvilinear grids) would otherwise
+  have their coordinates held to the data-variable rules. Coordinates need no
+  _FillValue/missing_value, long_name or coordinates of their own, so
+  variables that identify themselves as time, latitude/longitude, or an
+  X/Y/Z/T axis are exempt from those rules. Their own rules (time units and
+  calendar, lat/lon units) still apply via check_time and check_lat_lon.
+  """
+  return (_is_time(name, var)
+          or _lat_lon_kind(name, var) is not None
+          or _text(var.attrs.get("axis")).upper() in {"X", "Y", "Z", "T"})
+
+
 def check_time(ds):
   """Check the time variable: it exists, has units and a calendar, and (warning) standard_name "time".
 
@@ -108,7 +126,7 @@ def check_coordinates(ds):
   return [
       finding(base.VAR_NO_COORDINATES, ERROR, f"Data variable '{name}' has no coordinates", str(name))
       for name in ds.data_vars
-      if ds[name].ndim > 0 and len(ds[name].coords) == 0
+      if ds[name].ndim > 0 and len(ds[name].coords) == 0 and not _is_coordinate_like(name, ds[name])
   ]
 
 
@@ -153,12 +171,15 @@ def _has_fill_value(var):
 def check_data_vars(ds):
   """Check each data variable has long_name, units (unless exempt) and a fill value.
 
-  A missing attribute is an error; a present-but-blank long_name/units is a warning.
-  Bounds variables are skipped. Returns a list of findings.
+  A missing long_name or units is an error. A missing _FillValue/missing_value,
+  or a present-but-blank long_name/units, is a warning.
+  Coordinates need none of these, so they are skipped: bounds variables, and
+  anything _is_coordinate_like even if xarray lists it under data_vars.
+  Returns a list of findings.
   """
   out = []
   for name in ds.data_vars:
-    if _BOUNDS_NAME.search(str(name)):
+    if _BOUNDS_NAME.search(str(name)) or _is_coordinate_like(name, ds[name]):
       continue
     var = ds[name]
     label = str(name)
@@ -170,7 +191,7 @@ def check_data_vars(ds):
       elif not exempt:
         out.append(finding(check_id, ERROR, f"Data variable '{name}' has no {attr}", label))
     if not _has_fill_value(var) and var.dtype.kind not in "SUO":
-      out.append(finding(base.VAR_FILL_VALUE_MISSING, ERROR,
+      out.append(finding(base.VAR_FILL_VALUE_MISSING, WARNING,
                          f"Data variable '{name}' has no _FillValue or missing_value", label))
   return out
 
