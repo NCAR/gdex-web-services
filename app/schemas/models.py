@@ -64,3 +64,23 @@ class TransformRequest(BaseModel):
     files: Annotated[List[str], AfterValidator(validate_files)] = Field(alias="Files")
     commands: List[Command] = Field(alias="Commands")
     callback_url: Optional[str] = Field(default=None, alias="CallbackUrl")
+
+
+class ComplianceRequest(BaseModel):
+    """Request model for POST /files/check-compliance.
+
+    demo json payload format :
+    {
+        "Path": "/glade/campaign/collections/gdex/data/d999999/",
+        "Recursive": true,
+        "CallbackUrl": "https://gdex.ucar.edu/submitportal/gdex-services-event/"
+    }
+
+    Path is an absolute path to a file or directory under /glade/ (the router
+    enforces the root). Recursive only matters for a directory: when false,
+    only the files directly inside it are scanned. CallbackUrl is optional and
+    must be one of the allowlisted portal URLs.
+    """
+    path: str = Field(alias="Path", min_length=1)
+    recursive: bool = Field(default=True, alias="Recursive")
+    callback_url: Optional[str] = Field(default=None, alias="CallbackUrl")

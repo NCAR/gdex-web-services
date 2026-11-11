@@ -37,80 +37,18 @@ def _detect_format(header: bytes) -> str | None:
     return None
 
 
-# Magic bytes for NetCDF variants, named for the generic /format endpoint.
-# netCDF-4 files are HDF5 under the hood; whether they use the restricted
-# "classic model" isn't recoverable from the header alone (it takes opening
-# the file with a library like netCDF4-python/h5py and inspecting groups and
-# user-defined types), so all HDF5-magic files are reported as "netcdf4".
-_NETCDF_FORMAT_MAGIC = {
-    b"CDF\x01": "netcdf3-classic",
-    b"CDF\x02": "netcdf3-64bit-offset",
-    b"CDF\x05": "netcdf3-64bit-data",
-    b"\x89HDF\r\n\x1a\n": "netcdf4",
-}
-
-_GRIB_MAGIC = b"GRIB"
-
-# Editions with a well-known name. Any other edition byte is still reported,
-# as "grib<N>", by _detect_file_format below.
-_GRIB_EDITIONS = {
-    1: "grib1",
-    2: "grib2",
-}
-
-# BUFR (WMO point-observation format, e.g. soundings/buoys) shares GRIB's
-# section-0 layout: 4-byte magic, then a 3-byte length, then a 1-byte edition.
-_BUFR_MAGIC = b"BUFR"
-_BUFR_EDITIONS = {
-    3: "bufr3",
-    4: "bufr4",
-}
-
-# HDF4's signature is a fixed 4-byte value (distinct from the HDF5 signature
-# used by netCDF-4 above).
-_HDF4_MAGIC = b"\x0e\x03\x13\x01"
-
-# TIFF/GeoTIFF and BigTIFF, little- and big-endian. This only identifies the
-# TIFF container and whether it's the 32-bit-offset ("tiff") or 64-bit-offset
-# ("bigtiff") variant, read from the version field right after the byte-order
-# mark - it doesn't confirm the file is actually geo-referenced, since that
-# takes walking the IFD tags rather than reading a fixed header.
-_TIFF_MAGIC = {
-    b"II*\x00": "tiff",
-    b"MM\x00*": "tiff",
-    b"II+\x00": "bigtiff",
-    b"MM\x00+": "bigtiff",
-}
-
-
-def _detect_file_format(header: bytes) -> tuple[str | None, str | None]:
-    """Identify a file's format family and specific version from its header bytes.
-
-    Returns a (family, format) tuple, e.g. ("netcdf", "netcdf4") or
-    ("grib", "grib2"). Returns (None, None) if the header doesn't match a
-    recognized format. GRIB/BUFR edition is read from byte 7 of the header,
-    per their shared indicator-section layout.
-    """
-    for magic, fmt in _NETCDF_FORMAT_MAGIC.items():
-        if header.startswith(magic):
-            return "netcdf", fmt
-
-    if header.startswith(_GRIB_MAGIC) and len(header) >= 8:
-        edition = header[7]
-        return "grib", _GRIB_EDITIONS.get(edition, f"grib{edition}")
-
-    if header.startswith(_BUFR_MAGIC) and len(header) >= 8:
-        edition = header[7]
-        return "bufr", _BUFR_EDITIONS.get(edition, f"bufr{edition}")
-
-    if header.startswith(_HDF4_MAGIC):
-        return "hdf", "hdf4"
-
-    for magic, fmt in _TIFF_MAGIC.items():
-        if header.startswith(magic):
-            return "tiff", fmt
-
-    return None, None
+# The magic-byte tables and _detect_file_format live in app/utils/file_formats.py
+# so the Celery tasks can use them without importing this router.
+from app.utils.file_formats import (  # noqa: E402,F401
+    _BUFR_EDITIONS,
+    _BUFR_MAGIC,
+    _GRIB_EDITIONS,
+    _GRIB_MAGIC,
+    _HDF4_MAGIC,
+    _NETCDF_FORMAT_MAGIC,
+    _TIFF_MAGIC,
+    _detect_file_format,
+)
 
 
 async def _read_local_header(path: str) -> bytes:
@@ -568,3 +506,46 @@ def check_data(path: str, background_tasks: BackgroundTasks, callback_url: str |
     "status": "FAILURE" with the message in "error", and later steps are SKIPPED.
     """
     return submit_check_data(path, callback_url, background_tasks)
+
+
+from app.schemas.models import ComplianceRequest
+from app.tasks.portal.compliance import submit_compliance
+from app.utils import callback as _callback
+from app.utils.file_validation import glade_path_validate
+
+
+@router.post("/check-compliance")
+def check_compliance(request: ComplianceRequest, background_tasks: BackgroundTasks):
+    """Queue a GDEX compliance scan of a /glade file or directory.
+
+    Body: {"Path": "/glade/...", "Recursive": true, "CallbackUrl": "<optional allowlisted portal URL>"}
+
+    NetCDF (including netCDF-4/HDF5) files and Zarr stores are checked; GRIB,
+    BUFR, HDF4 and TIFF are recognised and reported "unsupported". Every file is
+    scanned. One file with an error makes the whole scan non-compliant, and
+    warnings (e.g. missing global attributes) are reported without failing it.
+
+    Flow (see app/tasks/portal/compliance.py):
+      1. This endpoint returns {"external_job_id": "<id>", "status": "SUBMITTED", "result": null}.
+      2. After the response is sent, the worker runs validate_path_task -> scan_files_task.
+      3. The final report is POSTed to CallbackUrl (if given) and returned by
+         GET /celery/task-status/<external_job_id>. Read result.tasks.scan_files:
+         "result" is true only if every scanned file passed, and "details" has
+         the counts plus the first 20 failing files and the first 20 warning-only files.
+      4. Every file's errors and warnings are logged to Boreas at log_url:
+         services_tmp/logs/check_compliance.<external_job_id>.jsonl.
+
+    403 if Path resolves outside /glade/ or CallbackUrl isn't allowlisted; 404 if Path doesn't exist.
+    """
+    try:
+        resolved = glade_path_validate(request.path)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    if not os.path.exists(resolved):
+        raise HTTPException(status_code=404, detail=f"Path does not exist: {request.path}")
+
+    callback_url = request.callback_url or None
+    if callback_url is not None and callback_url not in _callback.ALLOWED_CALLBACK_URLS:
+        raise HTTPException(status_code=403, detail="Callback URL not allowed")
+
+    return submit_compliance(resolved, request.recursive, callback_url, background_tasks)

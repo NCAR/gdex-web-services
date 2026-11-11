@@ -91,6 +91,16 @@ app/
 
 `routers/files.py` and `routers/generators.py` are self-contained, read-only conveniences (format sniffing, plotting) that don't go through the `compose` → `dscheck` → HPC pipeline at all — they run entirely inside the API pod.
 
+### Portal jobs (Celery) — e.g. `POST /files/check-compliance`
+
+A second, lighter job path runs alongside `compose` → `dscheck` → HPC: read-only jobs that just need to look at files on the `/glade/campaign` NFS mount run as **Celery tasks** on the worker Deployment (same image as the API, different command; Redis is the broker and result backend). Nothing is queued to PBS.
+
+1. The router validates the request (absolute path under `/glade/`, allowlisted `CallbackUrl`) and calls a `submit_<endpoint>` function in `app/tasks/portal/`, which builds a Celery chain and returns `{"external_job_id", "status": "SUBMITTED"}` immediately.
+2. The worker runs the chain. Each step records its outcome in a shared *step report* (`app/tasks/portal/common.py`), and the worker re-validates the path rather than trusting the queued job.
+3. The final report is returned by `GET /celery/task-status/{external_job_id}` and POSTed to the callback URL if one was given. A JSONL log of every step is uploaded to Boreas at `services_tmp/logs/<endpoint>.<external_job_id>.jsonl`. Nothing is written to `/glade`.
+
+Current portal jobs: `GET /files/check-data` (readability + size) and `POST /files/check-compliance` (GDEX compliance scan). The compliance rules live in `app/tasks/portal/compliance_checks/`, one module per file format; NetCDF/netCDF-4 and Zarr (v2 and v3) are implemented, sharing one set of checks in `cf_checks.py`, and GRIB, BUFR, HDF4 and TIFF are placeholders that report "unsupported". See the docstring in `app/tasks/portal/__init__.py` for how to add a new portal job.
+
 ## 3. HPC execution package (`gdexws/`)
 
 Installed as a Python package directly on HPC (`pip install .`) and executed there by the PBS job. It is organized as one orchestrator, many single-purpose tools, and shared low-level helpers:
