@@ -3,11 +3,13 @@
 Every format module in this package exposes check(path) -> FileReport, built
 with the helpers here, so scan_files can treat all formats the same way.
 
-A finding is one thing wrong (severity "error") or worth a look (severity
-"warning") in a file:
+A finding is one thing wrong or worth a look in a file:
 
-    {"check": "<CHECK_ID>", "severity": "error" | "warning",
-     "variable": "<name>" | null, "message": "<human readable>"}
+    {"check": "<CHECK_ID>", "variable": "<name>" | null, "message": "<human readable>"}
+
+Its severity is not part of the output: it is whichever list of the file report
+it sits in. finding() still takes a severity ("error" | "warning") so
+file_report can sort it into "errors" or "warnings", and then drops it.
 
 A file report is:
 
@@ -44,18 +46,29 @@ WARNING = "warning"
 
 
 def finding(check, severity, message, variable=None):
-  """Build one finding dict (see the module docstring for the shape)."""
+  """Build one finding, tagged with its severity so file_report can sort it.
+
+  The severity key is internal: file_report removes it (see the module docstring).
+  """
   return {"check": check, "severity": severity, "variable": variable, "message": message}
 
 
+def _without_severity(f):
+  """A finding without its internal severity key: severity is implied by the list it ends up in."""
+  return {k: v for k, v in f.items() if k != "severity"}
+
+
 def file_report(path, fmt, status, findings=()):
-  """Build a file report, sorting the findings into its errors and warnings lists."""
+  """Build a file report, sorting the findings into its errors and warnings lists.
+
+  The findings in the report have no "severity" key, since the list they are in says it.
+  """
   return {
       "path": path,
       "format": fmt,
       "status": status,
-      "errors": [f for f in findings if f["severity"] == ERROR],
-      "warnings": [f for f in findings if f["severity"] == WARNING],
+      "errors": [_without_severity(f) for f in findings if f["severity"] == ERROR],
+      "warnings": [_without_severity(f) for f in findings if f["severity"] == WARNING],
   }
 
 

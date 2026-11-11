@@ -238,6 +238,20 @@ class TestZarrChecks:
         assert ids(zarr_check(str(store))["errors"]) == [base.UNREADABLE]
 
 
+class TestFindingShape:
+    def test_findings_have_no_severity_key(self, tmp_path):
+        """Severity is implied by errors vs warnings, so it isn't repeated on each finding."""
+        report = netcdf.check(make_nc(tmp_path, drop_time=True, fill=None, global_attrs={"title": "t"}))
+        assert report["errors"] and report["warnings"]
+        for f in report["errors"] + report["warnings"]:
+            assert set(f) == {"check", "variable", "message"}
+
+    def test_errors_and_warnings_are_still_sorted_into_the_right_lists(self, tmp_path):
+        report = netcdf.check(make_nc(tmp_path, drop_time=True, fill=None))
+        assert ids(report["errors"]) == [base.TIME_MISSING]
+        assert base.VAR_FILL_VALUE_MISSING in ids(report["warnings"])
+
+
 class TestDispatch:
     def test_unknown_format_is_skipped(self, tmp_path):
         p = tmp_path / "notes.txt"
