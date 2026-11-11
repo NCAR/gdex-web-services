@@ -23,3 +23,4 @@ app.include_router(celery.router)
 @app.get("/")
 async def root():
     return {"status": "ok", "service": "gdex-web-services"}
+
