@@ -8,7 +8,7 @@ from pathlib import Path
 import os
 import json
 
-from gdexws.build.lib.gdexws.utils.logging import service_log
+from gdexws.utils import service_log
 
 
 def _load_settings(group_setting_json: Path) -> dict:
@@ -134,18 +134,21 @@ def create(
         group_name = rel_path.split(os.sep)[-1]  # use the last part of the relative path as the group name
         group_name = f"{group_name}"
 
-        group_index = next_group_index
-        dict_group_settings[group_name_key] = {
-            'group_index': group_index,
-            'group_name': f"{group_name}_gidx_{group_index}",
-            'parent_index': 0,
-            'title': f"Group {group_index} - {group_name}",
-            'web_path': f"{rel_path}",
-            'save_path': f"{rel_path}",
-            'file_pattern': None,
-            'webfile_pattern': None,
-            'scan_root_path': scan_root_path,
-        }
+        if group_name_key not in dict_group_settings:
+            # new folder: assign the next sequential index
+            # (a group already in the existing JSON keeps its index and settings)
+            group_index = next_group_index
+            dict_group_settings[group_name_key] = {
+                'group_index': group_index,
+                'group_name': f"{group_name}_gidx_{group_index}",
+                'parent_index': 0,
+                'title': f"Group {group_index} - {group_name}",
+                'web_path': f"{rel_path}",
+                'save_path': f"{rel_path}",
+                'file_pattern': None,
+                'webfile_pattern': None,
+                'scan_root_path': scan_root_path,
+            }
 
         # attach the file pattern to whichever group this directory belongs to
         rel_path = subdir
