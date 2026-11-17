@@ -52,7 +52,23 @@ def _validate_target(target_dir: Path) -> Path:
 
 
 def _is_loop(real_dir: str, real_child: str) -> bool:
-    """True if ``real_child`` is ``real_dir`` itself or one of its ancestors."""
+    """True if ``real_child`` is ``real_dir`` itself or one of its ancestors.
+
+    Used to detect symlink loops when copying directories.
+
+    Parameters
+    ----------
+    real_dir : str
+        Real path of the directory being copied.
+    real_child : str
+        Real path of the child being considered.
+
+    Returns
+    -------
+    bool
+        True if ``real_child`` is ``real_dir`` itself or one of its ancestors.
+    
+    """
     return real_dir == real_child or real_dir.startswith(real_child.rstrip(os.sep) + os.sep)
 
 
@@ -75,6 +91,7 @@ def _is_selected(name: str, include: List[str], exclude: List[str]) -> bool:
     Returns
     -------
     bool
+        True if the name passes the include and exclude patterns.
 
     Examples
     --------
