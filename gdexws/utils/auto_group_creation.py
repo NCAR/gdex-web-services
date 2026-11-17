@@ -67,8 +67,7 @@ def create(
     exist_group_json : Path
         path to the existing group settings JSON file
     new_group_json : Path
-        path to save the new group settings JSON file, if provided the discovered group settings will be saved to this file.
-        if not provided and the existing group JSON file is avaialable, the discovered group settings will overwrite the existing settings.
+        path to save the new group settings JSON file. if not provided no JSON file will be saved
     filename_wcard_list : list, optional
         list of filename wildcards to match within each group directory, by default ["*"],
         adding subdirectory paths to the wildcard patterns also works if needed.
@@ -166,8 +165,6 @@ def create(
         # save the updated group settings to disk
         if new_group_json:
             _save_settings(dict_group_settings, new_group_json)
-        elif exist_group_json:
-            _save_settings(dict_group_settings, exist_group_json)
 
         return dict_group_settings
 
@@ -247,7 +244,5 @@ def create(
     # save the updated group settings to disk
     if new_group_json:
         _save_settings(dict_group_settings, new_group_json)
-    elif exist_group_json:
-        _save_settings(dict_group_settings, exist_group_json)
 
     return dict_group_settings
