@@ -27,6 +27,14 @@
 # Upgrade gdexws in the HPC venv every day at 03:00
 # 0 3 * * * (date; /glade/u/home/gdexdata/gdexwsenv/bin/python -m pip install --upgrade --disable-pip-version-check "gdexws>=0.1.1") >> /glade/u/home/gdexdata/gdexwsenv-upgrade.log 2>&1
 #
+# Manual upgrade of all packages (as gdexdata: sudo -iu gdexdata)
+# 1. Upgrade every package to the versions required in this file
+#   /glade/u/home/gdexdata/gdexwsenv/bin/python -m pip install --upgrade -r https://raw.githubusercontent.com/NCAR/gdex-web-services/main/gdexws/requirements_hpc.txt
+#
+# 2. Rebuild the setuid wrappers (no sudo needed again)
+#   /glade/u/home/gdexdata/gdexwsenv/bin/pywrapper-install -u       # recompile pywrapper and reinstall all pgstart_USER binaries
+#   /glade/u/home/gdexdata/gdexwsenv/bin/pywrapper-install -l all   # link any new setuid_* program the upgrade added (existing links are kept)
+#
 
 
 gdexws>=0.1.1

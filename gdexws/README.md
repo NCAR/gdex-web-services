@@ -32,6 +32,61 @@ pip install -e ./gdexws
 
 The version is derived from the repository's git tags, so install from a git clone (not a copied folder) to get a meaningful version number.
 
+## HPC setup and continuous update
+
+The HPC environment that PBS jobs use lives at `/glade/u/home/gdexdata/gdexwsenv`. The packages it needs are listed in [requirements_hpc.txt](requirements_hpc.txt).
+
+- **Python:** 3.11 from `ncarenv/25.10` (`/glade/u/apps/casper/25.10/opt/view/bin/python3`).
+- **User:** run every command below as `gdexdata` (`sudo -iu gdexdata`).
+- **System tools:** `setfacl`/`getfacl` (OS package `acl`) must be on `PATH`.
+
+### 1. Create the virtual environment
+
+```bash
+python3 -m venv /glade/u/home/gdexdata/gdexwsenv
+source /glade/u/home/gdexdata/gdexwsenv/bin/activate        # bash/zsh
+source /glade/u/home/gdexdata/gdexwsenv/bin/activate.csh    # csh/tcsh
+```
+
+### 2. Install the packages
+
+```bash
+/glade/u/home/gdexdata/gdexwsenv/bin/python -m pip install -r https://raw.githubusercontent.com/NCAR/gdex-web-services/main/gdexws/requirements_hpc.txt
+```
+
+### 3. Install the setuid wrappers
+
+These let specialists run tools such as `gdexcp` as `gdexdata`, so copied files get the right owner and permissions.
+
+```bash
+pywrapper-install -c                              # compile pywrapper (owned by gdexdata, setuid, mode 4750)
+pywrapper-install --pgstart --username gdexdata   # create pgstart_gdexdata
+pywrapper-install -l all                          # create the dsarch/gdexcp symlinks through pgstart_gdexdata
+```
+
+### Daily automatic upgrade (gdexws only)
+
+Add this to the `gdexdata` crontab to upgrade `gdexws` every day at 03:00:
+
+```cron
+0 3 * * * (date; /glade/u/home/gdexdata/gdexwsenv/bin/python -m pip install --upgrade --disable-pip-version-check "gdexws>=0.1.1") >> /glade/u/home/gdexdata/gdexwsenv-upgrade.log 2>&1
+```
+
+Check `/glade/u/home/gdexdata/gdexwsenv-upgrade.log` for the result of each run.
+
+### Manual upgrade (all packages)
+
+When the other packages (`rda-python-*`) need upgrading, run as `gdexdata` (`sudo -iu gdexdata`):
+
+```bash
+# 1. Upgrade every package to the versions required in requirements_hpc.txt
+/glade/u/home/gdexdata/gdexwsenv/bin/python -m pip install --upgrade -r https://raw.githubusercontent.com/NCAR/gdex-web-services/main/gdexws/requirements_hpc.txt
+
+# 2. Rebuild the setuid wrappers (no sudo needed again)
+/glade/u/home/gdexdata/gdexwsenv/bin/pywrapper-install -u       # recompile pywrapper and reinstall all pgstart_USER binaries
+/glade/u/home/gdexdata/gdexwsenv/bin/pywrapper-install -l all   # link any new setuid_* program the upgrade added
+```
+
 ## CLI Commands
 
 All tools run through the single `gdexws` command: `gdexws <tool> [options]`. Run `gdexws --help` to list tools and `gdexws <tool> --help` for a tool's options. `-d/--debug` is available on every tool.
