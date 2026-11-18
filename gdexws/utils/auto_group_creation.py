@@ -4,11 +4,70 @@ It allows automatic discovery of group information by scanning the source direct
 and supports maintaining stable group indices using existing group settings.
 """
 
+from fnmatch import fnmatchcase
 from pathlib import Path
 import os
 import json
 
 from gdexws.utils import service_log
+
+
+def is_excluded(rel_path: str, exclude_list: list = None) -> bool:
+    """Whether a path relative to the scan root matches any exclude pattern.
+
+    - A pattern without ``/`` (e.g. ``tmp*``, ``*.log``) matches the name of the
+      file or of any folder above it, at any depth.
+    - A pattern with ``/`` (e.g. ``runA/scratch``) matches the relative path itself
+      or any folder above it.
+
+    Matching is case-sensitive with shell-style wildcards (``*``, ``?``, ``[abc]``).
+
+    Parameters
+    ----------
+    rel_path : str
+        Path relative to the scan root, using ``/``, e.g. ``runA/out/diag.1.nc``.
+    exclude_list : list of str, optional
+        Exclude patterns. Default: nothing is excluded.
+
+    Examples
+    --------
+    >>> is_excluded("runA/tmp/diag.1.nc", ["tmp"])
+    True
+    >>> is_excluded("runA/diag.1.log", ["*.log"])
+    True
+    >>> is_excluded("runA/scratch/x.nc", ["runA/scratch"])
+    True
+    >>> is_excluded("runB/scratch/x.nc", ["runA/scratch"])
+    False
+    """
+    if not exclude_list:
+        return False
+    parts = rel_path.strip("/").split("/")
+    for pattern in exclude_list:
+        pattern = pattern.strip("/")
+        if "/" in pattern:
+            # compare against runA, runA/scratch, runA/scratch/x.nc, ...
+            for depth in range(1, len(parts) + 1):
+                if fnmatchcase("/".join(parts[:depth]), pattern):
+                    return True
+        else:
+            for part in parts:
+                if fnmatchcase(part, pattern):
+                    return True
+    return False
+
+
+def _add_exclude(group: dict, exclude_list: list) -> None:
+    """Record the exclude patterns in a group, keeping any it already has.
+
+    Exclusions are only ever added (never dropped), because removing one could make
+    a later copy include files that were meant to stay out.
+    """
+    current = group.get('exclude_pattern') or []
+    for pattern in exclude_list:
+        if pattern not in current:
+            current.append(pattern)
+    group['exclude_pattern'] = current
 
 
 def _load_settings(group_setting_json: Path) -> dict:
@@ -52,7 +111,8 @@ def create(
     new_group_json: Path = None,
     filename_wcard_list: list = None,
     one_group: bool = False,
-    logger: object = None
+    logger: object = None,
+    exclude_list: list = None
 ) -> dict:
     """
     Discover group info settings by walking the source directory tree under orignal_data_location.
@@ -76,6 +136,11 @@ def create(
     logger : object, optional
         logger object for logging messages, by default None
         set to logging.getLogger() to use the root logger in the main script.
+    exclude_list : list, optional
+        folder or file patterns to leave out, see ``is_excluded``, by default None.
+        Excluded folders are not walked (so they never become groups) and excluded
+        files are ignored. The patterns are also saved in each group as
+        ``exclude_pattern``, so tools that copy the group's files can skip them too.
 
 
     Returns
@@ -87,6 +152,8 @@ def create(
     # if filename_wcard_list is not provided, default to ["*"] for including all files
     if filename_wcard_list is None:
         filename_wcard_list = ["*"]
+    if exclude_list is None:
+        exclude_list = []
 
     if exist_group_json:
         if not exist_group_json.exists():
@@ -113,11 +180,24 @@ def create(
     if one_group:
         # descend through directories that hold only a single subdirectory and no files,
         # until reaching the directory that actually contains files
-        while not any(os.path.isfile(os.path.join(scan_root_path, f)) for f in os.listdir(scan_root_path)):
-            subdirs = [
-                d for d in os.listdir(scan_root_path)
-                if os.path.isdir(os.path.join(scan_root_path, d))
-            ]
+        while True:
+            # sort this level's entries into kept files and kept subdirectories
+            has_files = False
+            subdirs = []
+            for name in os.listdir(scan_root_path):
+                full_path = os.path.join(scan_root_path, name)
+                rel_path = os.path.relpath(full_path, orignal_data_location).replace(os.sep, '/')
+                if is_excluded(rel_path, exclude_list):
+                    continue
+                if os.path.isfile(full_path):
+                    has_files = True
+                elif os.path.isdir(full_path):
+                    subdirs.append(name)
+
+            # this directory holds the data files: it is the single group
+            if has_files:
+                break
+
             if len(subdirs) > 1:
                 raise ValueError("Multiple subdirectories found, unable to determine which one to scan.")
             if not subdirs:
@@ -165,6 +245,9 @@ def create(
                 webfile_pattern_list.append(os.path.join(rel_path, filename_wcard))
             dict_group_settings[group_name_key]['webfile_pattern'] = webfile_pattern_list
 
+        if exclude_list:
+            _add_exclude(dict_group_settings[group_name_key], exclude_list)
+
         # save the updated group settings to disk
         if new_group_json:
             _save_settings(dict_group_settings, new_group_json)
@@ -177,6 +260,26 @@ def create(
         root = os.path.normpath(root)
         parent_index = dict_path_to_gid[root]
         parent_name = dict_path_to_gname[root]
+
+        # drop excluded folders and files; editing dirs in place stops os.walk entering them,
+        # and an excluded folder does not count when deciding whether the tree branches here
+        rel_root = os.path.relpath(root, scan_root_path).replace(os.sep, '/')
+        if rel_root == '.':
+            # the scan root itself: names need no folder in front
+            rel_root = ''
+        else:
+            rel_root = rel_root + '/'
+        kept_dirs = []
+        for dir_name in dirs:
+            if not is_excluded(rel_root + dir_name, exclude_list):
+                kept_dirs.append(dir_name)
+        dirs[:] = kept_dirs  # replace the contents (not the list) so os.walk sees it
+
+        kept_files = []
+        for file_name in files:
+            if not is_excluded(rel_root + file_name, exclude_list):
+                kept_files.append(file_name)
+        files = kept_files
 
         # for directory branching, create a new group for each subfolder
         if len(dirs) > 1:
@@ -243,6 +346,10 @@ def create(
                 for filename_wcard in filename_wcard_list:
                     webfile_pattern_list.append(os.path.join(rel_path, filename_wcard))
                 dict_group_settings[parent_name]['webfile_pattern'] = webfile_pattern_list
+
+    if exclude_list:
+        for group in dict_group_settings.values():
+            _add_exclude(group, exclude_list)
 
     # save the updated group settings to disk
     if new_group_json:

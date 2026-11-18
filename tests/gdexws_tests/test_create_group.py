@@ -7,6 +7,7 @@ import pytest
 from gdexws import cli
 from gdexws.tools import create_group as cg
 from gdexws.tools.create_group import CreateGroupError, create_group
+from gdexws.utils.auto_group_creation import is_excluded
 
 
 @pytest.fixture(autouse=True)
@@ -185,6 +186,76 @@ class TestOneGroup:
         assert _indices(out) == {"legacy": 4, "run": 5}
 
 
+class TestExclude:
+    @pytest.mark.parametrize("rel,patterns,expected", [
+        ("runA/tmp/diag.1.nc", ["tmp"], True),           # folder name at any depth
+        ("runA/tmp", ["tmp*"], True),
+        ("runA/diag.1.log", ["*.log"], True),            # file name
+        ("runA/scratch/x.nc", ["runA/scratch"], True),   # path from the source
+        ("runB/scratch/x.nc", ["runA/scratch"], False),  # same name, other path
+        ("runA/scratch/x.nc", ["scratch/x.nc"], False),  # paths start at the source
+        ("runA/diag.1.nc", ["Diag*"], False),            # case-sensitive
+        ("runA/diag.1.nc", [], False),
+        ("runA/diag.1.nc", None, False),
+    ])
+    def test_is_excluded(self, rel, patterns, expected):
+        assert is_excluded(rel, patterns) is expected
+
+    def test_excluded_folder_is_not_a_group(self, tmp_path):
+        src = tmp_path / "src"
+        _make_tree(src, ["runA/f.nc", "runB/f.nc", "tmp/f.nc"])
+        groups = create_group(src, tmp_path / "groups.json", exclude=["tmp"])
+        assert set(groups) == {"runA", "runB"}
+
+    def test_excluded_folder_does_not_count_as_a_branch(self, tmp_path):
+        """runA holds out/ and scratch/; with scratch excluded runA has one child, so
+        out/ joins group runA instead of becoming its own group."""
+        src = tmp_path / "src"
+        _make_tree(src, ["runA/out/f.nc", "runA/scratch/f.nc", "runB/f.nc"])
+        without = create_group(src, tmp_path / "a.json")
+        assert "runA_out" in without and "runA_scratch" in without
+        groups = create_group(src, tmp_path / "b.json", exclude=["scratch"])
+        assert set(groups) == {"runA", "runB"}
+        assert groups["runA"]["file_pattern"] == ["runA/out/*"]
+
+    def test_excluded_path_only(self, tmp_path):
+        """'runA/scratch' leaves runB/scratch alone."""
+        src = tmp_path / "src"
+        _make_tree(src, ["runA/out/f.nc", "runA/scratch/f.nc", "runB/out/f.nc", "runB/scratch/f.nc"])
+        groups = create_group(src, tmp_path / "groups.json", exclude=["runA/scratch"])
+        assert "runA_scratch" not in groups
+        assert "runB_scratch" in groups
+
+    def test_excluded_files_do_not_warn_under_root(self, tmp_path, log):
+        src = tmp_path / "src"
+        _make_tree(src, ["runA/f.nc", "runB/f.nc", "README.txt"])
+        create_group(src, tmp_path / "groups.json", exclude=["README*"])
+        assert not [c for c in log.call_args_list if c.args[1] == "WARNING"]
+
+    def test_patterns_saved_in_each_group(self, source, tmp_path):
+        groups = create_group(source, tmp_path / "groups.json", exclude=["*.log", "tmp"])
+        for group in groups.values():
+            assert group["exclude_pattern"] == ["*.log", "tmp"]
+
+    def test_no_exclude_adds_no_key(self, source, tmp_path):
+        groups = create_group(source, tmp_path / "groups.json")
+        assert all("exclude_pattern" not in g for g in groups.values())
+
+    def test_existing_excludes_are_kept_and_merged(self, source, tmp_path):
+        first = tmp_path / "first.json"
+        create_group(source, first, exclude=["*.log"])
+        groups = create_group(source, tmp_path / "second.json", existing=first, exclude=["tmp"])
+        assert groups["runA"]["exclude_pattern"] == ["*.log", "tmp"]
+
+    def test_one_group_skips_excluded_folder(self, tmp_path):
+        """With tmp excluded, src has a single folder left to descend into."""
+        src = tmp_path / "src"
+        _make_tree(src, ["run/a.nc", "tmp/x.nc"])
+        groups = create_group(src, tmp_path / "groups.json", one_group=True, exclude=["tmp"])
+        assert set(groups) == {"run"}
+        assert groups["run"]["exclude_pattern"] == ["tmp"]
+
+
 class TestErrors:
     def test_missing_source(self, tmp_path):
         with pytest.raises(CreateGroupError, match="not a directory"):
@@ -212,20 +283,24 @@ class TestMain:
         assert _indices(out) == {"runA": 1, "runB": 2}
 
     @pytest.mark.parametrize("flags", [
-        ["--source", "S", "--output", "O", "--existing-json", "E", "--include", "a", "--include", "b", "--one-group"],
-        ["-s", "S", "-o", "O", "-e", "E", "--include", "a", "--include", "b", "--one-group"],
+        ["--source", "S", "--output", "O", "--existing-json", "E", "--include", "a", "--include", "b",
+         "--exclude", "x", "--exclude", "y", "--one-group"],
+        ["-s", "S", "-o", "O", "-e", "E", "--include", "a", "--include", "b",
+         "--exclude", "x", "--exclude", "y", "--one-group"],
     ])
     def test_options_reach_create_group(self, flags):
         with patch.object(cg, "create_group") as mock:
             self._run(*flags)
         mock.assert_called_once_with(Path("S"), Path("O"), existing=Path("E"),
-                                     include=["a", "b"], one_group=True, debug=False)
+                                     include=["a", "b"], exclude=["x", "y"], one_group=True,
+                                     debug=False)
 
     def test_existing_json_defaults_to_none(self):
         with patch.object(cg, "create_group") as mock:
             self._run("-s", "S", "-o", "O")
         assert mock.call_args.kwargs["existing"] is None
         assert mock.call_args.kwargs["include"] is None
+        assert mock.call_args.kwargs["exclude"] is None
 
     def test_same_existing_and_output_overwrites(self, source, tmp_path):
         out = tmp_path / "groups.json"

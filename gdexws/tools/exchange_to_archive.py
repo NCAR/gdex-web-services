@@ -28,6 +28,7 @@ from typing import List, Literal, Optional, Tuple
 
 from gdexws.tools.create_exchange_dir import EXCHANGE_DIR
 from gdexws.utils import service_log
+from gdexws.utils.auto_group_creation import is_excluded
 from gdexws.utils.file_validation import PathValidationError, relpath_validate
 
 COMMAND_NAME = "exchange-to-archive"
@@ -127,6 +128,9 @@ def _get_group_files(group_key: str, group: dict, web_path: str) -> List[Tuple[P
     so every subfolder is kept: with ``web_path`` ``runA``, ``runA/diag.1.nc`` gives
     ``diag.1.nc`` and ``runA/out/diag.1.nc`` gives ``out/diag.1.nc``.
 
+    Files matching the group's ``exclude_pattern`` (saved by ``create-group --exclude``)
+    are skipped.
+
     Raises
     ------
     ExchangeToArchiveError
@@ -134,6 +138,7 @@ def _get_group_files(group_key: str, group: dict, web_path: str) -> List[Tuple[P
     """
     source_root = _confirm_source_root(group_key, group)
     group_dir = source_root / web_path
+    exclude_list = group.get("exclude_pattern") or []
     pairs: List[Tuple[Path, str]] = []
     seen = set()
     for pattern in group["file_pattern"]:
@@ -149,6 +154,10 @@ def _get_group_files(group_key: str, group: dict, web_path: str) -> List[Tuple[P
             if file_path in seen:
                 continue
             seen.add(file_path)
+            if is_excluded(file_path.relative_to(source_root).as_posix(), exclude_list):
+                service_log(COMMAND_NAME, "INFO", "Skipping excluded file", group=group_key,
+                            path=str(file_path))
+                continue
             try:
                 dest = file_path.relative_to(group_dir).as_posix()
             except ValueError:
@@ -241,7 +250,10 @@ def _copy_group(exe, group_key, files, target_args, target, dataset_id, dry_run,
         return [], list(files)
 
     # return copied, failed list
-    return [target + file_path.name for file_path in files], []
+    copied = []
+    for file_path in files:
+        copied.append(target + file_path.name)
+    return copied, []
 
 
 def exchange_to_archive(

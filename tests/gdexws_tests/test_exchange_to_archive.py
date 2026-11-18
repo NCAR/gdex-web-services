@@ -288,6 +288,27 @@ class TestSubfolders:
         }
 
 
+class TestExcludePattern:
+    def test_excluded_files_and_folders_are_skipped(self, roots, tmp_path, gdexcp):
+        exchange, archive = roots
+        src = exchange / "web"
+        for rel in ["runA/out/diag.1.nc", "runA/tmp/diag.1.nc", "runA/diag.1.log"]:
+            (src / rel).parent.mkdir(parents=True, exist_ok=True)
+            (src / rel).touch()
+        groups = {"runA": {"web_path": "runA", "file_pattern": ["runA/*", "runA/*/*"],
+                           "exclude_pattern": ["tmp", "*.log"], "scan_root_path": str(src)}}
+        copied = exchange_to_archive(_setup(exchange, tmp_path, groups), DSID, "glade")
+        dest = archive / DSID / "runA"
+        assert sorted(copied) == sorted([str(dest / "diag.1.nc"), str(dest / "diag.2.nc"),
+                                         str(dest / "hist.1.nc"), str(dest / "out/diag.1.nc")])
+
+    def test_group_without_exclude_key_copies_everything(self, roots, tmp_path, gdexcp):
+        """JSON made before --exclude existed has no exclude_pattern key."""
+        exchange, _ = roots
+        copied = exchange_to_archive(_setup(exchange, tmp_path), DSID, "glade")
+        assert len(copied) == 3
+
+
 class TestWebPath:
     @pytest.mark.parametrize("web_path", [None, "", ".", "../..", "/etc", "runA/../../x"])
     def test_bad_web_path_rejected(self, roots, tmp_path, gdexcp, web_path):

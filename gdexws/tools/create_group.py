@@ -30,7 +30,7 @@ class _ServiceLogger:
 
 
 def create_group(source: Path, output: Path, existing: Path | None = None, include=None,
-                 one_group: bool = False, debug: bool = False) -> dict:
+                 exclude=None, one_group: bool = False, debug: bool = False) -> dict:
     """Scan ``source`` and save its group settings to ``output``.
 
     Parameters
@@ -46,6 +46,13 @@ def create_group(source: Path, output: Path, existing: Path | None = None, inclu
     include : list of str, optional
         Wildcards for the files to put in each group, e.g. ``["diag.*.nc"]``.
         Default: every file (``["*"]``).
+    exclude : list of str, optional
+        Folders or files to leave out, e.g. ``["tmp*", "*.log", "runA/scratch"]``.
+        A pattern without ``/`` matches a name at any depth; one with ``/`` matches
+        that path relative to ``source``. Excluded folders are not scanned, so they
+        never become groups. The patterns are saved in each group as
+        ``exclude_pattern``, and ``exchange-to-archive`` skips those files too.
+        Default: nothing excluded.
     one_group : bool
         Treat the whole source as a single group.
     debug : bool
@@ -65,6 +72,7 @@ def create_group(source: Path, output: Path, existing: Path | None = None, inclu
     Examples
     --------
     $ gdexws create-group --source /lustre/desc1/gdex/work/jdoe/d430681.cckw --output group_settings.json --include 'diag.*.nc' --include 'history.*.nc'
+    $ gdexws create-group -s <source> -o group_settings.json --exclude 'tmp*' --exclude 'runA/scratch'
     """
     if not source.is_dir():
         raise CreateGroupError(f"Source is not a directory: {source}")
@@ -74,7 +82,7 @@ def create_group(source: Path, output: Path, existing: Path | None = None, inclu
     if debug:
         service_log(COMMAND_NAME, "DEBUG", "Scanning source", source=str(source),
                     existing=str(existing) if existing else None,
-                    include=include, one_group=one_group)
+                    include=include, exclude=exclude, one_group=one_group)
     try:
         groups = create(
             orignal_data_location=source,
@@ -83,6 +91,7 @@ def create_group(source: Path, output: Path, existing: Path | None = None, inclu
             filename_wcard_list=include,
             one_group=one_group,
             logger=_ServiceLogger(),
+            exclude_list=exclude,
         )
     except ValueError as exc:  # e.g. --one-group with several subdirectories
         raise CreateGroupError(str(exc)) from exc
@@ -105,6 +114,10 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--include", action="append", metavar="PATTERN",
                         help="Wildcard for files to put in each group, e.g. 'diag.*.nc' "
                              "(repeatable; quote it; default: every file)")
+    parser.add_argument("--exclude", action="append", metavar="PATTERN",
+                        help="Folder or file to leave out, e.g. 'tmp*', '*.log' or 'runA/scratch' "
+                             "(a name matches at any depth, a path with '/' is relative to "
+                             "--source; repeatable; quote it)")
     parser.add_argument("--one-group", action="store_true",
                         help="Treat the whole source as a single group")
 
@@ -112,9 +125,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 def run(args: argparse.Namespace) -> None:
     """Execute the tool with parsed arguments."""
     try:
-        existing = Path(args.existing_json) if args.existing_json else None
+        existing = None
+        if args.existing_json:
+            existing = Path(args.existing_json)
         create_group(Path(args.source), Path(args.output), existing=existing,
-                     include=args.include, one_group=args.one_group, debug=args.debug)
+                     include=args.include, exclude=args.exclude, one_group=args.one_group,
+                     debug=args.debug)
     except CreateGroupError as exc:
         service_log(COMMAND_NAME, "ERROR", str(exc), source=args.source, output=args.output)
         sys.exit(1)
